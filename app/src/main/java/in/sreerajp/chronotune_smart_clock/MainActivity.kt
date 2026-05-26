@@ -142,6 +142,14 @@ class MainActivity : ComponentActivity() {
 
         AppPrefs.init(applicationContext)
 
+        // After a fresh install or force-stop, Android suppresses APPWIDGET_UPDATE
+        // broadcasts, so the launcher shows "Tap to open this app so your widget
+        // can refresh." Opening MainActivity clears the stopped flag — push a
+        // render now so the widget catches up the moment the user lands here.
+        DigitalClockWidgetProvider.renderAll(applicationContext)
+        AnalogClockWidgetProvider.renderAll(applicationContext)
+        AnalogClockWidgetProvider.scheduleNextTick(applicationContext)
+
         setContent {
             val systemTheme = isSystemInDarkTheme()
             // Setup dynamic theme state with user toggle override
