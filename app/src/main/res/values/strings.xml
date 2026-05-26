@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Clock</string>
+    <string name="widget_digital_clock_label">Chronos Digital</string>
+    <string name="widget_digital_clock_description">A clean digital time, seconds, and date readout.</string>
+    <string name="widget_analog_clock_label">Chronos Analog</string>
+    <string name="widget_analog_clock_description">The signature Chronos watch face on your home screen.</string>
+</resources>

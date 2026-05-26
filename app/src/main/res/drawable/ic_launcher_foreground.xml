@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer vermillion bezel glow (soft halo) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#33FF6B47"
+        android:strokeWidth="6"
+        android:pathData="M54,54 m-32,0 a32,32 0 1,0 64,0 a32,32 0 1,0 -64,0 Z" />
+
+    <!-- Dial face (cosmic velvet, matches the analog widget face) -->
+    <path
+        android:fillColor="#181D2A"
+        android:pathData="M54,54 m-30,0 a30,30 0 1,0 60,0 a30,30 0 1,0 -60,0 Z" />
+
+    <!-- Bezel: solid vermillion ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF6B47"
+        android:strokeWidth="2"
+        android:pathData="M54,54 m-30,0 a30,30 0 1,0 60,0 a30,30 0 1,0 -60,0 Z" />
+
+    <!-- Bezel: faint inner accent ring (vermillion 20%) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#33FF6B47"
+        android:strokeWidth="0.6"
+        android:pathData="M54,54 m-25,0 a25,25 0 1,0 50,0 a25,25 0 1,0 -50,0 Z" />
+
+    <!-- ===== Quarter ticks (12 / 3 / 6 / 9) — bold vermillion ===== -->
+    <path android:fillColor="#00000000" android:strokeColor="#FF6B47" android:strokeWidth="2.4" android:strokeLineCap="round"
+        android:pathData="M54,25 L54,30" />
+    <path android:fillColor="#00000000" android:strokeColor="#FF6B47" android:strokeWidth="2.4" android:strokeLineCap="round"
+        android:pathData="M83,54 L78,54" />
+    <path android:fillColor="#00000000" android:strokeColor="#FF6B47" android:strokeWidth="2.4" android:strokeLineCap="round"
+        android:pathData="M54,83 L54,78" />
+    <path android:fillColor="#00000000" android:strokeColor="#FF6B47" android:strokeWidth="2.4" android:strokeLineCap="round"
+        android:pathData="M25,54 L30,54" />
+
+    <!-- ===== Hour ticks (1,2,4,5,7,8,10,11) — vermillion 70% ===== -->
+    <path android:fillColor="#00000000" android:strokeColor="#B3FF6B47" android:strokeWidth="1.4" android:strokeLineCap="round"
+        android:pathData="M69,29 L67.5,31.6" />
+    <path android:fillColor="#00000000" android:strokeColor="#B3FF6B47" android:strokeWidth="1.4" android:strokeLineCap="round"
+        android:pathData="M79,39 L76.4,40.5" />
+    <path android:fillColor="#00000000" android:strokeColor="#B3FF6B47" android:strokeWidth="1.4" android:strokeLineCap="round"
+        android:pathData="M79,69 L76.4,67.5" />
+    <path android:fillColor="#00000000" android:strokeColor="#B3FF6B47" android:strokeWidth="1.4" android:strokeLineCap="round"
+        android:pathData="M69,79 L67.5,76.4" />
+    <path android:fillColor="#00000000" android:strokeColor="#B3FF6B47" android:strokeWidth="1.4" android:strokeLineCap="round"
+        android:pathData="M39,79 L40.5,76.4" />
+    <path android:fillColor="#00000000" android:strokeColor="#B3FF6B47" android:strokeWidth="1.4" android:strokeLineCap="round"
+        android:pathData="M29,69 L31.6,67.5" />
+    <path android:fillColor="#00000000" android:strokeColor="#B3FF6B47" android:strokeWidth="1.4" android:strokeLineCap="round"
+        android:pathData="M29,39 L31.6,40.5" />
+    <path android:fillColor="#00000000" android:strokeColor="#B3FF6B47" android:strokeWidth="1.4" android:strokeLineCap="round"
+        android:pathData="M39,29 L40.5,31.6" />
+
+    <!-- ===== Hour hand (vermillion) — points to 10 (at 10:10) ===== -->
+    <!-- Glow underlay -->
+    <path android:fillColor="#00000000" android:strokeColor="#66FF6B47" android:strokeWidth="6" android:strokeLineCap="round"
+        android:pathData="M58,57 L40,44" />
+    <!-- Solid hand -->
+    <path android:fillColor="#00000000" android:strokeColor="#FF6B47" android:strokeWidth="3.6" android:strokeLineCap="round"
+        android:pathData="M58,57 L40,44" />
+
+    <!-- ===== Minute hand (gold) — points to 2 (at :10) ===== -->
+    <!-- Glow underlay -->
+    <path android:fillColor="#00000000" android:strokeColor="#66F2C14E" android:strokeWidth="5" android:strokeLineCap="round"
+        android:pathData="M50,57 L76,41" />
+    <!-- Solid hand -->
+    <path android:fillColor="#00000000" android:strokeColor="#F2C14E" android:strokeWidth="2.8" android:strokeLineCap="round"
+        android:pathData="M50,57 L76,41" />
+
+    <!-- ===== Center hub (layered: vermillion -> dark inset -> red core) ===== -->
+    <path android:fillColor="#4DFF6B47"
+        android:pathData="M54,54 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0 Z" />
+    <path android:fillColor="#FF6B47"
+        android:pathData="M54,54 m-3.2,0 a3.2,3.2 0 1,0 6.4,0 a3.2,3.2 0 1,0 -6.4,0 Z" />
+    <path android:fillColor="#181D2A"
+        android:pathData="M54,54 m-1.8,0 a1.8,1.8 0 1,0 3.6,0 a1.8,1.8 0 1,0 -3.6,0 Z" />
+    <path android:fillColor="#FF1744"
+        android:pathData="M54,54 m-0.9,0 a0.9,0.9 0 1,0 1.8,0 a0.9,0.9 0 1,0 -1.8,0 Z" />
+</vector>

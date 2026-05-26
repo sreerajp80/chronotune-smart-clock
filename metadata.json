@@ -1,0 +1,6 @@
+{
+  "name": "Clock",
+  "description": "A feature-rich Android clock app featuring multiple location clocks, custom tone alarms, a stopwatch, a timer, and an automated music scheduler.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

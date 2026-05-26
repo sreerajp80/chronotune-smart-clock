@@ -1,0 +1,55 @@
+# Gradle
+.gradle/
+/build/
+build/
+/captures
+.externalNativeBuild
+.cxx
+
+# Kotlin
+.kotlin/
+*.iml
+
+# Android build outputs
+*.apk
+*.aab
+*.ap_
+*.aar
+*.dex
+
+# Local config (paths, SDK location, secrets)
+local.properties
+.env
+
+# Signing keys — NEVER commit
+*.jks
+*.keystore
+debug.keystore
+keystore.properties
+
+# IntelliJ / Android Studio
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+/.idea/deploymentTargetDropDown.xml
+/.idea/deploymentTargetSelector.xml
+/.idea/misc.xml
+
+# JVM crash / replay logs
+hs_err_pid*.log
+replay_pid*.log
+*.hprof
+
+# General logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Reference / design prototypes (not part of build)
+/Android_Clock_extracted/
+*.zip

@@ -1,0 +1,36 @@
+package `in`.sreerajp.chronotune_smart_clock.data
+
+import android.content.Context
+import androidx.room.Database
+import androidx.room.Room
+import androidx.room.RoomDatabase
+
+@Database(
+    entities = [Alarm::class, WorldClock::class, MusicSchedule::class],
+    version = 1,
+    exportSchema = false
+)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun alarmDao(): AlarmDao
+    abstract fun worldClockDao(): WorldClockDao
+    abstract fun musicScheduleDao(): MusicScheduleDao
+
+    companion object {
+        @Volatile
+        private var INSTANCE: AppDatabase? = null
+
+        fun getDatabase(context: Context): AppDatabase {
+            return INSTANCE ?: synchronized(this) {
+                val instance = Room.databaseBuilder(
+                    context.applicationContext,
+                    AppDatabase::class.java,
+                    "clock_database"
+                )
+                .fallbackToDestructiveMigration(dropAllTables = true)
+                .build()
+                INSTANCE = instance
+                instance
+            }
+        }
+    }
+}
