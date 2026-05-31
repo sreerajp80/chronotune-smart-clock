@@ -18,6 +18,41 @@ class AudioEngine(private val context: Context) {
     private var playlistJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
+    private val audioManager by lazy {
+        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }
+    // The system alarm-stream level we override while ringing, so we can put it back
+    // afterwards. -1 means "not currently overridden".
+    private var savedAlarmStreamVolume: Int = -1
+
+    // Make the in-app volume setting the *only* thing that determines loudness. All playback
+    // runs on USAGE_ALARM, whose output the OS scales by the device's STREAM_ALARM slider; by
+    // pinning that stream to max while we ring, the per-track `volume` scalar (and the synth's
+    // baked-in gain) become the sole determinant — independent of the phone's alarm volume.
+    private fun overrideAlarmStream() {
+        try {
+            if (savedAlarmStreamVolume == -1) {
+                savedAlarmStreamVolume = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+            }
+            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, max, 0)
+        } catch (e: Exception) {
+            Log.e("AudioEngine", "Failed to override alarm stream volume: ${e.message}")
+        }
+    }
+
+    // Restore the user's original alarm-stream level so we don't permanently change it.
+    private fun restoreAlarmStream() {
+        if (savedAlarmStreamVolume == -1) return
+        try {
+            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, savedAlarmStreamVolume, 0)
+        } catch (e: Exception) {
+            Log.e("AudioEngine", "Failed to restore alarm stream volume: ${e.message}")
+        } finally {
+            savedAlarmStreamVolume = -1
+        }
+    }
+
     data class PlaylistItem(val toneName: String, val uri: String?)
 
     // List of gorgeous synth track options
@@ -33,6 +68,7 @@ class AudioEngine(private val context: Context) {
     // Plays simulated pre-loaded files or custom select URIs
     fun playAudio(toneName: String, uriString: String? = null, volume: Float = 0.8f, durationMs: Long? = null) {
         stop()
+        overrideAlarmStream()
 
         if (!uriString.isNullOrBlank()) {
             try {
@@ -175,6 +211,7 @@ class AudioEngine(private val context: Context) {
     fun playPlaylist(items: List<PlaylistItem>, volume: Float, durationMs: Long?) {
         stop()
         if (items.isEmpty()) return
+        overrideAlarmStream()
 
         playlistJob = scope.launch {
             var idx = 0
@@ -304,5 +341,8 @@ class AudioEngine(private val context: Context) {
         } finally {
             mediaPlayer = null
         }
+
+        // Put the device's alarm-stream volume back the way the user had it.
+        restoreAlarmStream()
     }
 }
