@@ -128,14 +128,100 @@ class AlarmReceiver : BroadcastReceiver() {
         val uri = intent.getStringExtra("URI") ?: ""
         val volume = intent.getFloatExtra("VOLUME", 0.8f)
         val durationMin = intent.getIntExtra("DURATION_MIN", 0)
+        val days = intent.getStringExtra("DAYS") ?: ""
+        val pauseStart = intent.getLongExtra("PAUSE_START", 0L)
+        val pauseEnd = intent.getLongExtra("PAUSE_END", 0L)
 
         Log.d("AlarmReceiver", "Alarm occurred! Type: $type, Label: $label, ID: $id")
+
+        // AlarmManager one-shots don't repeat. For a repeating alarm/schedule we must re-arm
+        // the next occurrence ourselves now that this one has fired — otherwise it rings once
+        // and never again. (One-shot alarms with no selected days are intentionally left to
+        // simply not repeat.)
+        if (days.isNotBlank()) {
+            rescheduleNextOccurrence(context, intent, type, id, label, tone, uri, volume, durationMin, days, pauseStart, pauseEnd)
+        }
+
+        // Safety guard: pause-aware scheduling should already keep this from firing during the
+        // pause window, but if a stale alarm slips through, suppress the ring (the re-arm above
+        // still lands the next occurrence after the window).
+        if (type == "ALARM" && isPausedNow(pauseStart, pauseEnd)) {
+            Log.d("AlarmReceiver", "Alarm $id is within its pause window — suppressing ring")
+            return
+        }
 
         // Hand off to a foreground service. The service owns the audio + notification +
         // activity launch so the process can't be reaped mid-alarm, dismiss reliably stops
         // playback, and the OS grants BAL exemption to launch the full-screen UI.
         val alarm = ActiveAlarmState.ActiveAlarm(id, type, label, tone, volume, durationMin, uri)
         ContextCompat.startForegroundService(context, AlarmService.startIntent(context, alarm))
+    }
+
+    private fun isPausedNow(pauseStartMillis: Long, pauseEndMillis: Long): Boolean {
+        if (pauseStartMillis <= 0L || pauseEndMillis <= 0L) return false
+        val today = `in`.sreerajp.chronotune_smart_clock.data.Alarm.todayEpochDay()
+        val perDay = `in`.sreerajp.chronotune_smart_clock.data.Alarm.MILLIS_PER_DAY
+        return today in (pauseStartMillis / perDay)..(pauseEndMillis / perDay)
+    }
+
+    private fun rescheduleNextOccurrence(
+        context: Context,
+        intent: Intent,
+        type: String,
+        id: Int,
+        label: String,
+        tone: String,
+        uri: String,
+        volume: Float,
+        durationMin: Int,
+        days: String,
+        pauseStart: Long,
+        pauseEnd: Long
+    ) {
+        val hour = intent.getIntExtra("HOUR", -1)
+        val minute = intent.getIntExtra("MINUTE", -1)
+        if (hour < 0 || minute < 0) return
+
+        val scheduler = AlarmScheduler(context)
+        try {
+            if (type == "MUSIC") {
+                scheduler.scheduleMusic(
+                    `in`.sreerajp.chronotune_smart_clock.data.MusicSchedule(
+                        id = id,
+                        hour = hour,
+                        minute = minute,
+                        durationMinutes = durationMin,
+                        label = label,
+                        isEnabled = true,
+                        daysOfWeek = days,
+                        musicTrackName = tone,
+                        customFileUri = uri,
+                        volume = volume
+                    )
+                )
+            } else {
+                scheduler.scheduleAlarm(
+                    `in`.sreerajp.chronotune_smart_clock.data.Alarm(
+                        id = id,
+                        hour = hour,
+                        minute = minute,
+                        label = label,
+                        isEnabled = true,
+                        daysOfWeek = days,
+                        customToneName = tone,
+                        customToneUri = uri,
+                        volume = volume,
+                        snoozeMinutes = intent.getIntExtra("SNOOZE_MIN", 5),
+                        isVibrate = intent.getBooleanExtra("VIBRATE", true),
+                        pauseStartMillis = pauseStart,
+                        pauseEndMillis = pauseEnd
+                    )
+                )
+            }
+            Log.d("AlarmReceiver", "Re-armed next occurrence for $type id=$id (days=$days)")
+        } catch (e: Exception) {
+            Log.e("AlarmReceiver", "Failed to re-arm next occurrence: ${e.message}")
+        }
     }
 }
 

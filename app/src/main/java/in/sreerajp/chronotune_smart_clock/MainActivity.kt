@@ -8,6 +8,7 @@ import android.provider.Settings
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -23,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.core.net.toUri
@@ -37,6 +39,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -75,7 +78,10 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import java.util.*
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 // Config and URI helpers
 data class AppConfig(val architect: String, val author: String, val version: String)
@@ -97,6 +103,18 @@ private fun loadConfig(context: Context): AppConfig {
     } catch (_: Exception) {
         AppConfig("Sreeraj P", "Gemini 3.5 Flash", "1.5.0")
     }
+}
+
+// Formats a pause window (UTC-midnight millis) as e.g. "Jun 20 – Jun 27". Uses the UTC zone
+// to match how the date-range picker encodes calendar dates.
+private fun formatPauseRange(startMillis: Long, endMillis: Long): String {
+    if (startMillis <= 0L || endMillis <= 0L) return "Not set"
+    val fmt = java.text.SimpleDateFormat("MMM d", Locale.getDefault()).apply {
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
+    val start = fmt.format(Date(startMillis))
+    val end = fmt.format(Date(endMillis))
+    return if (start == end) start else "$start – $end"
 }
 
 private fun getFileNameFromUri(context: Context, uri: Uri): String {
@@ -982,8 +1000,8 @@ fun AlarmsScreen(
                 @Suppress("ASSIGNED_VALUE_IS_NEVER_READ")
                 showAddDialog = false
             },
-            onSave = { hr, min, lbl, days, tone, uri, vol, vib ->
-                viewModel.addAlarm(hr, min, lbl, days, tone, uri, vol, vib)
+            onSave = { hr, min, lbl, days, tone, uri, vol, vib, pStart, pEnd ->
+                viewModel.addAlarm(hr, min, lbl, days, tone, uri, vol, vib, pStart, pEnd)
                 @Suppress("ASSIGNED_VALUE_IS_NEVER_READ")
                 showAddDialog = false
             }
@@ -995,7 +1013,7 @@ fun AlarmsScreen(
             existing = current,
             is24Hour = is24Hour,
             onDismiss = { editingAlarm = null },
-            onSave = { hr, min, lbl, days, tone, uri, vol, vib ->
+            onSave = { hr, min, lbl, days, tone, uri, vol, vib, pStart, pEnd ->
                 val daysString = days.sorted().joinToString(",")
                 viewModel.updateAlarm(
                     current.copy(
@@ -1006,7 +1024,9 @@ fun AlarmsScreen(
                         customToneName = tone,
                         customToneUri = uri,
                         volume = vol,
-                        isVibrate = vib
+                        isVibrate = vib,
+                        pauseStartMillis = pStart,
+                        pauseEndMillis = pEnd
                     )
                 )
                 editingAlarm = null
@@ -1059,6 +1079,37 @@ fun AlarmCard(
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(top = 2.dp)
                         )
+                    }
+                    if (alarm.isPauseConfigured()) {
+                        val pausedNow = alarm.isPausedNow()
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .padding(top = 4.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(
+                                    if (pausedNow) MaterialTheme.colorScheme.tertiary.copy(alpha = 0.18f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                                )
+                                .padding(horizontal = 7.dp, vertical = 2.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DateRange,
+                                contentDescription = null,
+                                tint = if (pausedNow) MaterialTheme.colorScheme.tertiary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = (if (pausedNow) "Paused · " else "Pause · ") +
+                                    formatPauseRange(alarm.pauseStartMillis, alarm.pauseEndMillis),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (pausedNow) MaterialTheme.colorScheme.tertiary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 
@@ -1147,28 +1198,29 @@ fun AlarmCard(
 @Composable
 private fun TimeDigitBox(
     value: String,
-    onValueChange: (String) -> Unit
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     androidx.compose.foundation.text.BasicTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = Modifier
-            .size(width = 76.dp, height = 68.dp)
-            .clip(RoundedCornerShape(12.dp))
+        modifier = modifier
+            .height(60.dp)
+            .clip(RoundedCornerShape(14.dp))
             .background(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(14.dp)
             )
             .border(
                 width = 1.5.dp,
                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(14.dp)
             ),
         singleLine = true,
         textStyle = LocalTextStyle.current.copy(
             textAlign = TextAlign.Center,
-            fontSize = 32.sp,
-            fontWeight = FontWeight.SemiBold,
+            fontSize = 34.sp,
+            fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
             color = MaterialTheme.colorScheme.onSurface,
             letterSpacing = (-0.5).sp
@@ -1217,61 +1269,244 @@ private fun AmPmPill(
     }
 }
 
-// Outlined pill used for day and tone selection chips in the alarm dialog.
-// Two size variants: "sm" (compact day chips) and "md" (tone chips).
+// A single selectable tone entry (built-in synth, system ringtone, or picked file).
+// uri is "" for built-in synth tones.
+private data class ToneItem(val name: String, val sub: String, val uri: String)
+
+// Enumerates the device's system alarm + ringtone sounds. Runs off the main thread
+// (callers wrap this in withContext(Dispatchers.IO)). Returns (title, uriString) pairs.
+private fun loadSystemRingtones(context: Context): List<Pair<String, String>> {
+    val result = mutableListOf<Pair<String, String>>()
+    val types = listOf(
+        android.media.RingtoneManager.TYPE_ALARM,
+        android.media.RingtoneManager.TYPE_RINGTONE
+    )
+    for (type in types) {
+        try {
+            val rm = android.media.RingtoneManager(context)
+            rm.setType(type)
+            val cursor = rm.cursor
+            while (cursor.moveToNext()) {
+                val title = cursor.getString(android.media.RingtoneManager.TITLE_COLUMN_INDEX)
+                val uri = rm.getRingtoneUri(cursor.position)
+                if (uri != null && !title.isNullOrBlank()) {
+                    result.add(title to uri.toString())
+                }
+            }
+        } catch (_: Exception) {
+            // RingtoneManager can throw on some OEMs / restricted profiles — skip gracefully.
+        }
+    }
+    return result.distinctBy { it.second }
+}
+
+// Solid-filled circular day selector chip (Repeat on Days).
 @Composable
-private fun OutlinedPillChip(
+private fun DayCircleChip(
     label: String,
     selected: Boolean,
-    shape: androidx.compose.ui.graphics.Shape,
-    onClick: () -> Unit,
-    size: String = "md"
+    onClick: () -> Unit
 ) {
     val primary = MaterialTheme.colorScheme.primary
-    val isSm = size == "sm"
-    val hPad = if (isSm) 11.dp else 14.dp
-    val vPad = if (isSm) 6.dp else 8.dp
-    val fontSize = if (isSm) 12.sp else 12.sp
-    val borderW = if (isSm) 1.2.dp else 1.3.dp
-
-    // Day chips (sm) use a soft primary tint; tone chips (md) use primaryContainer.
-    val selectedBg = if (isSm) primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.primaryContainer
-    val selectedBorder = if (isSm) primary else MaterialTheme.colorScheme.primaryContainer
-    val selectedText = if (isSm) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onPrimaryContainer
-
     Box(
         modifier = Modifier
-            .heightIn(min = if (isSm) 28.dp else 32.dp)
-            .clip(shape)
+            .size(38.dp)
+            .clip(CircleShape)
             .background(
-                color = if (selected) selectedBg else Color.Transparent,
-                shape = shape
+                color = if (selected) primary else Color.Transparent,
+                shape = CircleShape
             )
             .border(
-                width = borderW,
-                color = if (selected) selectedBorder else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-                shape = shape
+                width = 1.dp,
+                color = if (selected) primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                shape = CircleShape
             )
-            .clickable(onClick = onClick)
-            .padding(horizontal = hPad, vertical = vPad),
+            .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
-            fontSize = fontSize,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            color = if (selected) selectedText else MaterialTheme.colorScheme.onSurfaceVariant
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
 
-// Dialog to Configure or edit alarms
+// Segmented tab chip used in the tone picker (Built-in / Ringtones / From File).
+@Composable
+private fun RowScope.ToneTabChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val primary = MaterialTheme.colorScheme.primary
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .height(34.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(
+                color = if (selected) primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(9.dp)
+            )
+            .border(
+                width = 1.dp,
+                color = if (selected) primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                shape = RoundedCornerShape(9.dp)
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+// Animated equalizer bars shown on a tone row while it is previewing.
+@Composable
+private fun EqBars(color: Color) {
+    val transition = rememberInfiniteTransition(label = "eq")
+    Row(
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        modifier = Modifier.height(13.dp)
+    ) {
+        listOf(0, 180, 360).forEach { delayMs ->
+            val scale by transition.animateFloat(
+                initialValue = 0.35f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(700, delayMillis = delayMs, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "bar$delayMs"
+            )
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .fillMaxHeight()
+                    .graphicsLayer {
+                        scaleY = scale
+                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 1f)
+                    }
+                    .background(color, RoundedCornerShape(1.dp))
+            )
+        }
+    }
+}
+
+// One row in the tone picker list: play/preview lead, name + sub, radio check.
+@Composable
+private fun TonePickerRow(
+    item: ToneItem,
+    selected: Boolean,
+    playing: Boolean,
+    onSelect: () -> Unit,
+    onTogglePlay: () -> Unit
+) {
+    val primary = MaterialTheme.colorScheme.primary
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(13.dp))
+            .background(
+                color = if (selected) primary.copy(alpha = 0.14f)
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                shape = RoundedCornerShape(13.dp)
+            )
+            .border(
+                width = 1.dp,
+                color = if (selected) primary.copy(alpha = 0.6f)
+                else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                shape = RoundedCornerShape(13.dp)
+            )
+            .clickable(onClick = onSelect)
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Play / EQ lead button
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(CircleShape)
+                .background(
+                    color = if (playing) primary else primary.copy(alpha = 0.14f),
+                    shape = CircleShape
+                )
+                .clickable(onClick = onTogglePlay),
+            contentAlignment = Alignment.Center
+        ) {
+            if (playing) {
+                EqBars(color = Color.White)
+            } else {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Preview ${item.name}",
+                    tint = primary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = item.name,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (selected) primary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+            Text(
+                text = item.sub,
+                fontSize = 11.5.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+        }
+        // Radio check
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(
+                    color = if (selected) primary else Color.Transparent,
+                    shape = CircleShape
+                )
+                .border(
+                    width = 2.dp,
+                    color = if (selected) primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Selected",
+                    tint = Color.White,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+        }
+    }
+}
+
+// Bottom sheet to Configure or edit alarms. Hosts two horizontally-sliding panes:
+// the main editor and a dedicated tone picker (Built-in / Ringtones / From File).
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlarmEditDialog(
     existing: Alarm? = null,
     is24Hour: Boolean,
     onDismiss: () -> Unit,
-    onSave: (hour: Int, minute: Int, label: String, repeatDays: List<Int>, tone: String, uri: String, volume: Float, isVibrate: Boolean) -> Unit
+    onSave: (hour: Int, minute: Int, label: String, repeatDays: List<Int>, tone: String, uri: String, volume: Float, isVibrate: Boolean, pauseStartMillis: Long, pauseEndMillis: Long) -> Unit
 ) {
     val initialHour24 = existing?.hour ?: 7
     val initialDisplayHour = if (is24Hour) {
@@ -1288,93 +1523,208 @@ fun AlarmEditDialog(
 
     val selectedDays = remember {
         mutableStateListOf<Int>().apply {
-            existing?.getRepeatDaysList()?.let { addAll(it) }
+            if (existing != null) existing.getRepeatDaysList().let { addAll(it) }
+            else addAll(listOf(1, 2, 3, 4, 5)) // Mon–Fri default for new alarms
         }
     }
     var currentTone by remember { mutableStateOf(existing?.customToneName ?: "Morning Breeze") }
+    var customToneUri by remember { mutableStateOf(existing?.customToneUri ?: "") }
     var volumeScale by remember { mutableFloatStateOf(existing?.volume ?: 0.8f) }
     var vibrate by remember { mutableStateOf(existing?.isVibrate ?: true) }
 
+    // Pause window (UTC-midnight millis; 0 = no pause). Opens a calendar range picker.
+    var pauseStartMillis by remember { mutableStateOf(existing?.pauseStartMillis ?: 0L) }
+    var pauseEndMillis by remember { mutableStateOf(existing?.pauseEndMillis ?: 0L) }
+    var showPausePicker by remember { mutableStateOf(false) }
+
     val tonesList = listOf("Morning Breeze", "Cosmic Shimmer", "Ocean Zen", "Digital Alarm", "Retro Chiptune", "Deep Lofi Lounge")
+    val builtinSubs = mapOf(
+        "Morning Breeze" to "Soft ambient",
+        "Cosmic Shimmer" to "Dreamy synth",
+        "Ocean Zen" to "Ocean calm",
+        "Digital Alarm" to "Alert buzzer",
+        "Retro Chiptune" to "Upbeat scale",
+        "Deep Lofi Lounge" to "Soothing arpeggio"
+    )
 
-    val previewContext = LocalContext.current
-    val previewEngine = remember { AudioEngine(previewContext.applicationContext) }
-    var isPreviewing by remember { mutableStateOf(false) }
+    // Tone picker navigation + content state
+    var screen by remember { mutableStateOf("main") } // "main" | "tones"
+    var toneTab by remember { mutableStateOf("builtin") } // "builtin" | "ringtones" | "files"
+    var query by remember { mutableStateOf("") }
+    var playingKey by remember { mutableStateOf<String?>(null) }
+    val pickedFiles = remember { mutableStateListOf<Pair<String, String>>() }
+    val ringtones = remember { mutableStateListOf<Pair<String, String>>() }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            previewEngine.stop()
+    val context = LocalContext.current
+    val previewEngine = remember { AudioEngine(context.applicationContext) }
+
+    fun stopPreview() {
+        previewEngine.stop()
+        playingKey = null
+    }
+
+    // Seed the picked-files tab with any existing custom file, then load system ringtones
+    // off the main thread and reconcile (a ringtone selection shouldn't also show as a file).
+    LaunchedEffect(Unit) {
+        val existingUri = existing?.customToneUri
+        if (!existingUri.isNullOrBlank() && pickedFiles.none { it.second == existingUri }) {
+            val displayName = existing?.customToneName?.ifBlank { "Custom file" } ?: "Custom file"
+            pickedFiles.add(displayName to existingUri)
+        }
+        val loaded = withContext(Dispatchers.IO) { loadSystemRingtones(context) }
+        ringtones.clear()
+        ringtones.addAll(loaded)
+        if (customToneUri.isNotBlank() && ringtones.any { it.second == customToneUri }) {
+            pickedFiles.removeAll { it.second == customToneUri }
         }
     }
 
-    Dialog(onDismissRequest = {
-        previewEngine.stop()
-        onDismiss()
-    }) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 580.dp)
-                .verticalScroll(rememberScrollState()),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 22.dp, vertical = 18.dp)) {
-                Text(
-                    text = if (existing == null) "Configure Alarm" else "Edit Alarm",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = (-0.3).sp,
-                    color = MaterialTheme.colorScheme.primary
+    DisposableEffect(Unit) {
+        onDispose { previewEngine.stop() }
+    }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
+            } catch (_: Exception) {
+            }
+            val name = getFileNameFromUri(context, uri)
+            val uriStr = uri.toString()
+            if (pickedFiles.none { it.second == uriStr }) pickedFiles.add(name to uriStr)
+            currentTone = name
+            customToneUri = uriStr
+            toneTab = "files"
+        }
+    }
+
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = {
+            previewEngine.stop()
+            onDismiss()
+        },
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+        dragHandle = { BottomSheetDefaults.DragHandle() }
+    ) {
+        // Back gesture returns from the tone picker to the main editor.
+        BackHandler(enabled = screen == "tones") {
+            stopPreview()
+            screen = "main"
+        }
+
+        // Input sanitizers respecting the active hour format
+        val hourMax = if (is24Hour) 23 else 12
+        val sanitizeHour: (String) -> String = { raw ->
+            val digits = raw.filter { it.isDigit() }.take(2)
+            when {
+                digits.isEmpty() -> ""
+                (digits.toIntOrNull() ?: 0) > hourMax -> hourInput
+                else -> digits
+            }
+        }
+        val sanitizeMinute: (String) -> String = { raw ->
+            val digits = raw.filter { it.isDigit() }.take(2)
+            when {
+                digits.isEmpty() -> ""
+                (digits.toIntOrNull() ?: 0) > 59 -> minuteInput
+                else -> digits
+            }
+        }
+
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            val widthPx = constraints.maxWidth.toFloat()
+            val progress by animateFloatAsState(
+                targetValue = if (screen == "tones") 1f else 0f,
+                animationSpec = tween(320),
+                label = "paneSlide"
+            )
+
+            // ---------------- MAIN EDITOR PANE ----------------
+            // This pane determines the sheet height; the tone pane matches it (matchParentSize)
+            // so switching panes never resizes the sheet and there is no trailing blank space.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        translationX = -0.16f * widthPx * progress
+                        alpha = 1f - 0.6f * progress
+                    }
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 4.dp)
+            ) {
+                // Header: title + close
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (existing == null) "Configure Alarm" else "Edit Alarm",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = (-0.4).sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), CircleShape)
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f), CircleShape)
+                            .clickable {
+                                previewEngine.stop()
+                                onDismiss()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Input sanitizers respecting the active hour format
-                val hourMax = if (is24Hour) 23 else 12
-                val sanitizeHour: (String) -> String = { raw ->
-                    val digits = raw.filter { it.isDigit() }.take(2)
-                    when {
-                        digits.isEmpty() -> ""
-                        // Allow leading "0" while typing; reject only when the full value exceeds the cap
-                        (digits.toIntOrNull() ?: 0) > hourMax -> hourInput
-                        else -> digits
-                    }
-                }
-                val sanitizeMinute: (String) -> String = { raw ->
-                    val digits = raw.filter { it.isDigit() }.take(2)
-                    when {
-                        digits.isEmpty() -> ""
-                        (digits.toIntOrNull() ?: 0) > 59 -> minuteInput
-                        else -> digits
-                    }
-                }
-
-                // Time picker row — large filled cards with AM/PM stack on the right
+                // Time picker row — filled cards with AM/PM stack on the right
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     TimeDigitBox(
                         value = hourInput,
-                        onValueChange = { hourInput = sanitizeHour(it) }
+                        onValueChange = { hourInput = sanitizeHour(it) },
+                        modifier = Modifier.weight(1f)
                     )
                     Text(
                         text = ":",
-                        fontSize = 26.sp,
-                        fontWeight = FontWeight.Medium,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 10.dp)
                     )
                     TimeDigitBox(
                         value = minuteInput,
-                        onValueChange = { minuteInput = sanitizeMinute(it) }
+                        onValueChange = { minuteInput = sanitizeMinute(it) },
+                        modifier = Modifier.weight(1f)
                     )
-
-                    Spacer(modifier = Modifier.weight(1f))
 
                     // AM/PM Switcher (12-hour mode only)
                     if (!is24Hour) {
+                        Spacer(modifier = Modifier.width(12.dp))
                         Column(
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
@@ -1384,42 +1734,39 @@ fun AlarmEditDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // Label Outlines
+                // Label
                 OutlinedTextField(
                     value = labelText,
                     onValueChange = { labelText = it },
                     placeholder = { Text("Alarm Label (e.g. Work)", fontSize = 13.sp) },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(12.dp),
                     singleLine = true,
-                    textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
+                    textStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
                 )
 
                 Spacer(modifier = Modifier.height(18.dp))
 
-                // Repeat Days Selection
+                // Repeat days
                 Text(
                     "Repeat on Days",
                     fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.1.sp,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 val dayChipsLabel = listOf("Mon" to 1, "Tue" to 2, "Wed" to 3, "Thu" to 4, "Fri" to 5, "Sat" to 6, "Sun" to 7)
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     dayChipsLabel.forEach { dayPair ->
                         val daySelected = selectedDays.contains(dayPair.second)
-                        OutlinedPillChip(
+                        DayCircleChip(
                             label = dayPair.first,
                             selected = daySelected,
-                            shape = CircleShape,
-                            size = "sm",
                             onClick = {
                                 if (daySelected) selectedDays.remove(dayPair.second)
                                 else selectedDays.add(dayPair.second)
@@ -1430,168 +1777,120 @@ fun AlarmEditDialog(
 
                 Spacer(modifier = Modifier.height(18.dp))
 
-                // Custom Tone Picker
-                val context = LocalContext.current
-                var customToneUri by remember { mutableStateOf(existing?.customToneUri ?: "") }
-
-                // Custom Tones Selector Drops
+                // Alarm Audio Tone — opens the tone picker pane
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            stopPreview()
+                            toneTab = when {
+                                customToneUri.isBlank() -> "builtin"
+                                ringtones.any { it.second == customToneUri } -> "ringtones"
+                                else -> "files"
+                            }
+                            query = ""
+                            screen = "tones"
+                        }
+                        .padding(vertical = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         "Alarm Audio Tone",
                         fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 0.1.sp,
+                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
-                    IconButton(
-                        onClick = {
-                            if (isPreviewing) {
-                                previewEngine.stop()
-                                isPreviewing = false
-                            } else {
-                                previewEngine.playAudio(
-                                    toneName = currentTone,
-                                    uriString = if (customToneUri.isBlank()) null else customToneUri,
-                                    volume = volumeScale,
-                                    durationMs = 10_000L
-                                )
-                                isPreviewing = true
-                            }
-                        },
-                        modifier = Modifier.size(28.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isPreviewing) Icons.Default.Stop else Icons.Default.PlayArrow,
-                            contentDescription = if (isPreviewing) "Stop preview" else "Preview tone",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    tonesList.forEach { tone ->
-                        OutlinedPillChip(
-                            label = tone,
-                            selected = currentTone == tone,
-                            shape = RoundedCornerShape(10.dp),
-                            onClick = {
-                                currentTone = tone
-                                customToneUri = ""
-                                if (isPreviewing) {
-                                    previewEngine.playAudio(
-                                        toneName = tone,
-                                        uriString = null,
-                                        volume = volumeScale,
-                                        durationMs = 10_000L
-                                    )
-                                }
-                            }
-                        )
-                    }
-                }
-
-                val filePickerLauncher = rememberLauncherForActivityResult(
-                    contract = ActivityResultContracts.OpenDocument()
-                ) { uri: Uri? ->
-                    if (uri != null) {
-                        try {
-                            context.contentResolver.takePersistableUriPermission(
-                                uri,
-                                Intent.FLAG_GRANT_READ_URI_PERMISSION
-                            )
-                        } catch (_: Exception) {
-                        }
-                        customToneUri = uri.toString()
-                        currentTone = getFileNameFromUri(context, uri)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-                OutlinedButton(
-                    onClick = { filePickerLauncher.launch(arrayOf("audio/*")) },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.5.dp,
-                        MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
-                    ),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
-                    ),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 11.dp)
-                ) {
-                    Icon(
-                        Icons.Default.CloudUpload,
-                        contentDescription = "Upload icon",
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        if (customToneUri.isBlank()) "Choose Custom File..." else "Change Custom File",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-                
-                if (customToneUri.isNotBlank()) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.weight(1f),
                     ) {
+                        Spacer(modifier = Modifier.weight(1f))
                         Text(
-                            text = "Picked: $currentTone",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.weight(1f),
-                            maxLines = 1
+                            text = currentTone,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
-                        IconButton(onClick = { customToneUri = ""; currentTone = "Morning Breeze" }) {
-                            Icon(Icons.Default.Clear, "Clear custom tone", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
-                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(18.dp))
 
-                // Sound Volume Indicator
+                // Sound Volume with percentage
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         Icons.AutoMirrored.Filled.VolumeUp,
                         contentDescription = "Volume Icon",
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         "Sound Volume",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
+                    Spacer(modifier = Modifier.weight(1f))
+                    Text(
+                        "${(volumeScale * 100).roundToInt()}%",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
-                Spacer(modifier = Modifier.height(2.dp))
                 Slider(
                     value = volumeScale,
                     onValueChange = { volumeScale = it },
                     valueRange = 0.1f..1.0f,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = SliderDefaults.colors(
-                        thumbColor = MaterialTheme.colorScheme.onSurface,
-                        activeTrackColor = MaterialTheme.colorScheme.primary,
-                        inactiveTrackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
-                    )
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(20.dp),
+                    thumb = {
+                        Box(
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surface, CircleShape)
+                                .border(2.5.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                        )
+                    },
+                    track = { sliderState ->
+                        val range = sliderState.valueRange
+                        val fraction = ((sliderState.value - range.start) /
+                            (range.endInclusive - range.start)).coerceIn(0f, 1f)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(fraction)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(MaterialTheme.colorScheme.primary)
+                            )
+                        }
+                    }
                 )
 
-                // Vibrate checklist
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Vibration toggle
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1599,34 +1898,96 @@ fun AlarmEditDialog(
                 ) {
                     Text(
                         "Vibration alerts",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Switch(checked = vibrate, onCheckedChange = { vibrate = it })
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
-                // Dialog Buttons Actions
+                // Pause alarm (date range) — opens the calendar range picker
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { showPausePicker = true }
+                        .padding(vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.DateRange,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            "Pause alarm",
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        val pauseConfigured = pauseStartMillis > 0L && pauseEndMillis > 0L
+                        if (pauseConfigured) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                            ) {
+                                Text(
+                                    text = formatPauseRange(pauseStartMillis, pauseEndMillis),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = "Not set",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Footer: Cancel + Save/Update
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     TextButton(
-                        onClick = onDismiss,
+                        onClick = {
+                            previewEngine.stop()
+                            onDismiss()
+                        },
                         colors = ButtonDefaults.textButtonColors(
                             contentColor = MaterialTheme.colorScheme.primary
                         )
                     ) {
-                        Text(
-                            "Cancel",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium
-                        )
+                        Text("Cancel", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     }
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
                     Button3D(
                         onClick = {
                             var rawHour = hourInput.toIntOrNull() ?: 7
@@ -1643,22 +2004,311 @@ fun AlarmEditDialog(
                                 }
                                 rawHour = rawHour.coerceIn(0, 23)
                             }
-                            onSave(rawHour, rawMin, labelText, selectedDays.toList(), currentTone, customToneUri, volumeScale, vibrate)
+                            onSave(rawHour, rawMin, labelText, selectedDays.toList(), currentTone, customToneUri, volumeScale, vibrate, pauseStartMillis, pauseEndMillis)
                         },
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(14.dp),
                         color = MaterialTheme.colorScheme.primary,
                         contentColor = Color.White,
                         elevation = 8.dp,
-                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
+                        contentPadding = PaddingValues(horizontal = 26.dp, vertical = 13.dp)
                     ) {
                         Text(
-                            "Save Alarm",
+                            if (existing == null) "Save Alarm" else "Update Alarm",
                             fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            fontWeight = FontWeight.Bold,
                             letterSpacing = 0.2.sp
                         )
                     }
                 }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            // ---------------- TONE PICKER PANE ----------------
+            Column(
+                modifier = Modifier
+                    .matchParentSize()
+                    .graphicsLayer { translationX = widthPx * (1f - progress) }
+                    .background(MaterialTheme.colorScheme.surface)
+            ) {
+                // Header: back + title
+                Row(
+                    modifier = Modifier.padding(start = 12.dp, end = 16.dp, top = 6.dp, bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), CircleShape)
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f), CircleShape)
+                            .clickable {
+                                stopPreview()
+                                screen = "main"
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Text(
+                        "Alarm Tone",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                // Search field
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search tones", fontSize = 14.sp) },
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(11.dp),
+                    textStyle = LocalTextStyle.current.copy(fontSize = 14.sp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Tabs
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    ToneTabChip("Built-in", toneTab == "builtin") { stopPreview(); toneTab = "builtin" }
+                    ToneTabChip("Ringtones", toneTab == "ringtones") { stopPreview(); toneTab = "ringtones" }
+                    ToneTabChip("From File", toneTab == "files") { stopPreview(); toneTab = "files" }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // List
+                val q = query.trim().lowercase()
+                val items = when (toneTab) {
+                    "builtin" -> tonesList.map { ToneItem(it, builtinSubs[it] ?: "Built-in tone", "") }
+                    "ringtones" -> ringtones.map { ToneItem(it.first, "System sound", it.second) }
+                    else -> pickedFiles.map { ToneItem(it.first, "From device", it.second) }
+                }
+                val filtered = if (q.isBlank()) items else items.filter { it.name.lowercase().contains(q) }
+
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    if (toneTab == "files" && pickedFiles.isEmpty() && q.isBlank()) {
+                        // Empty state for the From File tab
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(18.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.CloudUpload,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                "No files added yet",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                "Pick any audio file from your device to use it as your alarm tone.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Button3D(
+                                onClick = { filePickerLauncher.launch(arrayOf("audio/*")) },
+                                shape = RoundedCornerShape(11.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                contentColor = Color.White,
+                                elevation = 6.dp,
+                                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 11.dp)
+                            ) {
+                                Text("Browse device files", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(filtered) { item ->
+                                val selected = if (item.uri.isBlank()) {
+                                    customToneUri.isBlank() && currentTone == item.name
+                                } else {
+                                    customToneUri == item.uri
+                                }
+                                val key = item.uri.ifBlank { item.name }
+                                TonePickerRow(
+                                    item = item,
+                                    selected = selected,
+                                    playing = playingKey == key,
+                                    onSelect = {
+                                        currentTone = item.name
+                                        customToneUri = item.uri
+                                    },
+                                    onTogglePlay = {
+                                        if (playingKey == key) {
+                                            stopPreview()
+                                        } else {
+                                            previewEngine.playAudio(
+                                                toneName = item.name,
+                                                uriString = item.uri.ifBlank { null },
+                                                volume = volumeScale,
+                                                durationMs = 10_000L
+                                            )
+                                            playingKey = key
+                                        }
+                                    }
+                                )
+                            }
+                            if (toneTab == "files" && pickedFiles.isNotEmpty()) {
+                                item {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(44.dp)
+                                            .clip(RoundedCornerShape(13.dp))
+                                            .border(
+                                                width = 1.dp,
+                                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                                                shape = RoundedCornerShape(13.dp)
+                                            )
+                                            .clickable { filePickerLauncher.launch(arrayOf("audio/*")) },
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Add,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            "Add another file",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Bottom bar: selected summary + Done
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(0.dp)
+                        )
+                        .padding(horizontal = 16.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Selected · $currentTone",
+                        fontSize = 11.5.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Button3D(
+                        onClick = {
+                            stopPreview()
+                            screen = "main"
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        contentColor = Color.White,
+                        elevation = 6.dp,
+                        contentPadding = PaddingValues(horizontal = 26.dp, vertical = 11.dp)
+                    ) {
+                        Text("Done", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // Calendar range picker for pausing the alarm over a span of days.
+        if (showPausePicker) {
+            val rangeState = rememberDateRangePickerState(
+                initialSelectedStartDateMillis = pauseStartMillis.takeIf { it > 0L },
+                initialSelectedEndDateMillis = pauseEndMillis.takeIf { it > 0L }
+            )
+            DatePickerDialog(
+                onDismissRequest = { showPausePicker = false },
+                confirmButton = {
+                    TextButton(
+                        enabled = rangeState.selectedStartDateMillis != null,
+                        onClick = {
+                            val start = rangeState.selectedStartDateMillis
+                            if (start != null) {
+                                pauseStartMillis = start
+                                // A single-day pause is allowed: fall back to the start date.
+                                pauseEndMillis = rangeState.selectedEndDateMillis ?: start
+                            }
+                            showPausePicker = false
+                        }
+                    ) { Text("Set") }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(onClick = {
+                            pauseStartMillis = 0L
+                            pauseEndMillis = 0L
+                            showPausePicker = false
+                        }) { Text("Clear") }
+                        TextButton(onClick = { showPausePicker = false }) { Text("Cancel") }
+                    }
+                }
+            ) {
+                DateRangePicker(
+                    state = rangeState,
+                    modifier = Modifier.weight(1f),
+                    title = {
+                        Text(
+                            "Pause alarm for date range",
+                            modifier = Modifier.padding(start = 24.dp, end = 12.dp, top = 16.dp),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                )
             }
         }
     }

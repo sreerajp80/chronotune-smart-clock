@@ -24,6 +24,14 @@ class AlarmScheduler(private val context: Context) {
             putExtra("URI", alarm.customToneUri)
             putExtra("VOLUME", alarm.volume)
             putExtra("VIBRATE", alarm.isVibrate)
+            putExtra("SNOOZE_MIN", alarm.snoozeMinutes)
+            // Carry repeat-day info + time so the receiver can re-arm the next occurrence after firing.
+            putExtra("DAYS", alarm.daysOfWeek)
+            putExtra("HOUR", alarm.hour)
+            putExtra("MINUTE", alarm.minute)
+            // Carry the pause window so the receiver can re-arm pause-aware after firing.
+            putExtra("PAUSE_START", alarm.pauseStartMillis)
+            putExtra("PAUSE_END", alarm.pauseEndMillis)
         }
 
         val pendingIntent = PendingIntent.getBroadcast(
@@ -33,17 +41,10 @@ class AlarmScheduler(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val calendar = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, alarm.hour)
-            set(Calendar.MINUTE, alarm.minute)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-
-            // If time is past, schedule for tomorrow
-            if (before(Calendar.getInstance())) {
-                add(Calendar.DATE, 1)
-            }
-        }
+        val calendar = nextTriggerTime(
+            alarm.hour, alarm.minute, alarm.getRepeatDaysList(),
+            alarm.pauseStartMillis, alarm.pauseEndMillis
+        )
 
         // setAlarmClock is the only AlarmManager API that grants the "user-facing alarm
         // clock" privilege. On Android 12+ this is what lets the resulting broadcast
@@ -108,6 +109,9 @@ class AlarmScheduler(private val context: Context) {
             putExtra("URI", schedule.customFileUri)
             putExtra("VOLUME", schedule.volume)
             putExtra("DURATION_MIN", schedule.durationMinutes)
+            putExtra("DAYS", schedule.daysOfWeek)
+            putExtra("HOUR", schedule.hour)
+            putExtra("MINUTE", schedule.minute)
         }
 
         // Offset the request code by 10000 to keep it unique from alarm IDs
@@ -118,16 +122,7 @@ class AlarmScheduler(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val calendar = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, schedule.hour)
-            set(Calendar.MINUTE, schedule.minute)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-
-            if (before(Calendar.getInstance())) {
-                add(Calendar.DATE, 1)
-            }
-        }
+        val calendar = nextTriggerTime(schedule.hour, schedule.minute, schedule.getRepeatDaysList())
 
         try {
             alarmManager.setAndAllowWhileIdle(
@@ -140,6 +135,66 @@ class AlarmScheduler(private val context: Context) {
             Log.e("AlarmScheduler", "Failed scheduling music: ${e.message}")
         }
     }
+
+    /**
+     * Computes the next time the alarm/schedule should fire.
+     *
+     * - When [repeatDays] is empty the alarm is a one-shot: today at hour:minute, or
+     *   tomorrow if that time has already passed.
+     * - When [repeatDays] is set (1=Monday … 7=Sunday, matching the model encoding) the
+     *   result is the soonest selected weekday at hour:minute that is still in the future.
+     * - When a pause window [pauseStartMillis]..[pauseEndMillis] is configured, any candidate
+     *   date that falls inside it is skipped so the alarm resumes only after the window ends.
+     */
+    private fun nextTriggerTime(
+        hour: Int,
+        minute: Int,
+        repeatDays: List<Int>,
+        pauseStartMillis: Long = 0L,
+        pauseEndMillis: Long = 0L
+    ): Calendar {
+        val calendar = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, hour)
+            set(Calendar.MINUTE, minute)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+
+        fun isPaused(cal: Calendar): Boolean {
+            if (pauseStartMillis <= 0L || pauseEndMillis <= 0L) return false
+            val day = Alarm.localCalendarToEpochDay(cal)
+            return day in (pauseStartMillis / Alarm.MILLIS_PER_DAY)..(pauseEndMillis / Alarm.MILLIS_PER_DAY)
+        }
+
+        if (repeatDays.isEmpty()) {
+            if (calendar.timeInMillis <= System.currentTimeMillis()) {
+                calendar.add(Calendar.DATE, 1)
+            }
+            // A one-shot landing inside the pause window is pushed to the day after it ends.
+            while (isPaused(calendar)) {
+                calendar.add(Calendar.DATE, 1)
+            }
+            return calendar
+        }
+
+        // Start from today; if today's time has already passed, begin scanning tomorrow.
+        if (calendar.timeInMillis <= System.currentTimeMillis()) {
+            calendar.add(Calendar.DATE, 1)
+        }
+        // Advance up to a year to land on the next selected weekday that isn't paused
+        // (a pause window can span longer than a single week).
+        repeat(366) {
+            if (repeatDays.contains(toModelDay(calendar.get(Calendar.DAY_OF_WEEK))) && !isPaused(calendar)) {
+                return calendar
+            }
+            calendar.add(Calendar.DATE, 1)
+        }
+        return calendar
+    }
+
+    // Converts Calendar.DAY_OF_WEEK (Sunday=1 … Saturday=7) to the model encoding (Monday=1 … Sunday=7).
+    private fun toModelDay(calendarDayOfWeek: Int): Int =
+        if (calendarDayOfWeek == Calendar.SUNDAY) 7 else calendarDayOfWeek - 1
 
     fun cancelMusic(schedule: MusicSchedule) {
         val intent = Intent(context, AlarmReceiver::class.java)

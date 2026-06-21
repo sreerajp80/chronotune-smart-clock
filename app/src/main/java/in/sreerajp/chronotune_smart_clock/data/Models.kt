@@ -2,6 +2,8 @@ package `in`.sreerajp.chronotune_smart_clock.data
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import java.util.Calendar
+import java.util.TimeZone
 
 @Entity(tableName = "alarms")
 data class Alarm(
@@ -15,7 +17,12 @@ data class Alarm(
     val customToneUri: String = "", // User chosen URI (if any)
     val volume: Float = 0.8f,
     val snoozeMinutes: Int = 5,
-    val isVibrate: Boolean = true
+    val isVibrate: Boolean = true,
+    // Pause window: while today falls within [pauseStartMillis, pauseEndMillis] the alarm is
+    // suppressed. Both are UTC-midnight millis (as produced by Material3 DateRangePicker);
+    // 0 means "no pause". Compared by epoch day to avoid timezone drift.
+    val pauseStartMillis: Long = 0L,
+    val pauseEndMillis: Long = 0L
 ) {
     fun getFormattedTime(is24Hour: Boolean = false): String {
         if (is24Hour) {
@@ -33,6 +40,39 @@ data class Alarm(
     fun getRepeatDaysList(): List<Int> {
         if (daysOfWeek.isBlank()) return emptyList()
         return daysOfWeek.split(",").mapNotNull { it.toIntOrNull() }
+    }
+
+    /** True when a pause window has been configured (both endpoints set). */
+    fun isPauseConfigured(): Boolean = pauseStartMillis > 0L && pauseEndMillis > 0L
+
+    /** True when the given epoch day falls inside the configured pause window (inclusive). */
+    fun isPausedOnEpochDay(epochDay: Long): Boolean {
+        if (!isPauseConfigured()) return false
+        val startDay = pauseStartMillis / MILLIS_PER_DAY
+        val endDay = pauseEndMillis / MILLIS_PER_DAY
+        return epochDay in startDay..endDay
+    }
+
+    /** True when today (local date) falls inside the configured pause window. */
+    fun isPausedNow(): Boolean = isPausedOnEpochDay(todayEpochDay())
+
+    companion object {
+        const val MILLIS_PER_DAY: Long = 86_400_000L
+
+        /**
+         * Epoch day for a local calendar date, using the same basis as Material3's
+         * DateRangePicker (which represents a calendar date as UTC midnight). We read the
+         * local Y/M/D and re-anchor it at UTC midnight so comparisons line up exactly.
+         */
+        fun localCalendarToEpochDay(cal: Calendar): Long {
+            val utc = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+                clear()
+                set(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH))
+            }
+            return utc.timeInMillis / MILLIS_PER_DAY
+        }
+
+        fun todayEpochDay(): Long = localCalendarToEpochDay(Calendar.getInstance())
     }
 }
 

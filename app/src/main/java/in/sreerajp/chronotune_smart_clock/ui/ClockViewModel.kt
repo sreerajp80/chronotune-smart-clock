@@ -144,7 +144,7 @@ class ClockViewModel(
 
         // Evaluate Alarms
         alarms.value.forEach { alarm ->
-            if (alarm.isEnabled && alarm.hour == hour && alarm.minute == minute) {
+            if (alarm.isEnabled && alarm.hour == hour && alarm.minute == minute && !alarm.isPausedNow()) {
                 val repeatDays = alarm.getRepeatDaysList()
                 if (repeatDays.isEmpty() || repeatDays.contains(mappedDay)) {
                     val active = ActiveAlarmState.ActiveAlarm(
@@ -187,7 +187,7 @@ class ClockViewModel(
     }
 
     // --- ALARM DATABASE OPERATIONS ---
-    fun addAlarm(hour: Int, minute: Int, label: String, repeatDays: List<Int>, toneName: String, toneUri: String, volume: Float, isVibrate: Boolean) {
+    fun addAlarm(hour: Int, minute: Int, label: String, repeatDays: List<Int>, toneName: String, toneUri: String, volume: Float, isVibrate: Boolean, pauseStartMillis: Long = 0L, pauseEndMillis: Long = 0L) {
         val daysString = repeatDays.sorted().joinToString(",")
         viewModelScope.launch {
             val alarm = Alarm(
@@ -199,7 +199,9 @@ class ClockViewModel(
                 customToneUri = toneUri,
                 volume = volume,
                 isVibrate = isVibrate,
-                isEnabled = true
+                isEnabled = true,
+                pauseStartMillis = pauseStartMillis,
+                pauseEndMillis = pauseEndMillis
             )
             val dbId = repository.insertAlarm(alarm).toInt()
             scheduler.scheduleAlarm(alarm.copy(id = dbId))
