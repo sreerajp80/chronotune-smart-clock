@@ -63,6 +63,7 @@ import `in`.sreerajp.chronotune_smart_clock.audio.AudioEngine
 import `in`.sreerajp.chronotune_smart_clock.data.*
 import `in`.sreerajp.chronotune_smart_clock.data.repository.ClockRepository
 import `in`.sreerajp.chronotune_smart_clock.ui.ActiveAlarmState
+import `in`.sreerajp.chronotune_smart_clock.ui.AlarmService
 import `in`.sreerajp.chronotune_smart_clock.ui.ClockViewModel
 import `in`.sreerajp.chronotune_smart_clock.ui.theme.Button3D
 import `in`.sreerajp.chronotune_smart_clock.ui.theme.MyApplicationTheme
@@ -364,8 +365,46 @@ fun ClockAppScreen(
                 }
             }
         }
-        // Ringing UI now lives in the standalone AlarmActivity, launched by the alarm
-        // notification's full-screen intent — keeps the alarm out of the main app surface.
+        // The dedicated full-screen AlarmActivity (launched by the alarm notification's
+        // full-screen intent) is the primary ringing UI. But when it can't come to the
+        // front — secured lock screen, FSI/overlay permission missing, or OEM
+        // background-launch restrictions — the user ends up here in the main app with the
+        // alarm still sounding and no way to stop it. Render the same ringing overlay here
+        // as a reliable fallback so the audio always has a visible Dismiss/Snooze screen.
+        val context = LocalContext.current
+        val activeAlarm by ActiveAlarmState.activeAlarm.collectAsStateWithLifecycle()
+        activeAlarm?.let { ring ->
+            AlarmRingingOverlay(
+                alarm = ring,
+                onDismiss = {
+                    // Stop via the service so audio + notification + foreground state are
+                    // torn down together.
+                    try {
+                        context.startService(AlarmService.stopIntent(context))
+                    } catch (_: Exception) {
+                        ActiveAlarmState.dismiss(context)
+                    }
+                },
+                onSnooze = {
+                    val snoozeId = ring.id
+                    val snoozeLabel = ring.label
+                    val snoozeTone = ring.tone
+                    val snoozeVolume = ring.volume
+                    try {
+                        context.startService(AlarmService.stopIntent(context))
+                    } catch (_: Exception) {
+                        ActiveAlarmState.dismiss(context)
+                    }
+                    ActiveAlarmState.scheduleSnooze(
+                        context = context,
+                        id = snoozeId,
+                        label = snoozeLabel,
+                        tone = snoozeTone,
+                        volume = snoozeVolume
+                    )
+                }
+            )
+        }
     }
 }
 
