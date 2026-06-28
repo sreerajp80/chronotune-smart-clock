@@ -1,12 +1,15 @@
 package `in`.sreerajp.chronotune_smart_clock.ui
 
 import android.content.Context
-import android.util.Log
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import `in`.sreerajp.chronotune_smart_clock.StopwatchPrefs
 import `in`.sreerajp.chronotune_smart_clock.data.Alarm
 import `in`.sreerajp.chronotune_smart_clock.data.MusicSchedule
+import `in`.sreerajp.chronotune_smart_clock.data.TimerItem
+import `in`.sreerajp.chronotune_smart_clock.data.TimerPreset
 import `in`.sreerajp.chronotune_smart_clock.data.WorldClock
 import `in`.sreerajp.chronotune_smart_clock.data.repository.ClockRepository
 import kotlinx.coroutines.Job
@@ -14,12 +17,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import java.util.Calendar
-import java.util.TimeZone
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 data class CityZone(val cityName: String, val timezoneId: String, val country: String)
 
@@ -70,35 +73,40 @@ class ClockViewModel(
         CityZone("Bangkok", "Asia/Bangkok", "Thailand")
     )
 
-    // --- STOPWATCH STATE ---
-    private var stopwatchJob: Job? = null
-    private var stopwatchBaseTime = 0L
-    private var stopwatchAccumulated = 0L
-
-    private val _stopwatchTime = MutableStateFlow(0L)
-    val stopwatchTime = _stopwatchTime.asStateFlow()
-
-    private val _stopwatchState = MutableStateFlow(StopwatchState.IDLE)
-    val stopwatchState = _stopwatchState.asStateFlow()
-
-    private val _laps = MutableStateFlow<List<Lap>>(emptyList())
-    val laps = _laps.asStateFlow()
-
+    // --- STOPWATCH STATE (persistent: backed by StopwatchPrefs hub + ChronometerService) ---
     enum class StopwatchState { IDLE, RUNNING, PAUSED }
     data class Lap(val number: Int, val splitTimeMs: Long, val lapTimeMs: Long)
 
-    // --- TIMER STATE ---
-    private var timerJob: Job? = null
-    private val _timerDuration = MutableStateFlow(0L) // original total milliseconds
-    val timerDuration = _timerDuration.asStateFlow()
+    // Smoothly-ticked elapsed value, always derived from the persisted elapsedRealtime base.
+    private val _stopwatchTime = MutableStateFlow(StopwatchPrefs.snapshot.value.elapsedNow())
+    val stopwatchTime = _stopwatchTime.asStateFlow()
 
-    private val _timerRemaining = MutableStateFlow(0L) // current countdown remaining ms
-    val timerRemaining = _timerRemaining.asStateFlow()
+    val stopwatchState: StateFlow<StopwatchState> = StopwatchPrefs.snapshot
+        .map {
+            when (it.state) {
+                StopwatchPrefs.STATE_RUNNING -> StopwatchState.RUNNING
+                StopwatchPrefs.STATE_PAUSED -> StopwatchState.PAUSED
+                else -> StopwatchState.IDLE
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StopwatchState.IDLE)
 
-    private val _timerState = MutableStateFlow(TimerState.IDLE)
-    val timerState = _timerState.asStateFlow()
+    val laps: StateFlow<List<Lap>> = StopwatchPrefs.snapshot
+        .map { snap -> snap.laps.map { Lap(it.number, it.splitTimeMs, it.lapTimeMs) } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    enum class TimerState { IDLE, RUNNING, PAUSED }
+    // --- TIMER STATE (persistent multi-timer list + named presets) ---
+    val timers: StateFlow<List<TimerItem>> = repository.allTimers
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val timerPresets: StateFlow<List<TimerPreset>> = repository.allTimerPresets
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Monotonic "now" tick the Timer UI uses to recompute each running timer's remaining time.
+    private val _nowElapsed = MutableStateFlow(SystemClock.elapsedRealtime())
+    val nowElapsed = _nowElapsed.asStateFlow()
+
+    private var chronoTickerJob: Job? = null
 
     class Factory(
         private val context: Context,
@@ -110,7 +118,24 @@ class ClockViewModel(
     }
 
     init {
+        StopwatchPrefs.init(context)
         startClocksTicker()
+        startChronoTicker()
+    }
+
+    // Drives the smooth stopwatch readout and the timer "now" tick from the persisted bases.
+    // Ticks at ~60fps only while something is actually counting; otherwise idles slowly.
+    private fun startChronoTicker() {
+        chronoTickerJob?.cancel()
+        chronoTickerJob = viewModelScope.launch {
+            while (isActive) {
+                _stopwatchTime.value = StopwatchPrefs.snapshot.value.elapsedNow()
+                _nowElapsed.value = SystemClock.elapsedRealtime()
+                val swRunning = StopwatchPrefs.snapshot.value.state == StopwatchPrefs.STATE_RUNNING
+                val anyTimerRunning = timers.value.any { it.state == TimerItem.STATE_RUNNING }
+                delay(if (swRunning || anyTimerRunning) 16L else 250L)
+            }
+        }
     }
 
     private fun startClocksTicker() {
@@ -302,98 +327,71 @@ class ClockViewModel(
     }
 
     // --- STOPWATCH CONTROLLER ---
-    fun startStopwatch() {
-        if (_stopwatchState.value == StopwatchState.RUNNING) return
-        
-        _stopwatchState.value = StopwatchState.RUNNING
-        stopwatchBaseTime = System.currentTimeMillis()
-        
-        stopwatchJob = viewModelScope.launch {
-            while (isActive) {
-                val elapsed = System.currentTimeMillis() - stopwatchBaseTime + stopwatchAccumulated
-                _stopwatchTime.value = elapsed
-                delay(16) // Tick at ~60fps for hyper-smooth subsecond animations!
-            }
+    // All mutations go through the StopwatchPrefs hub, which persists the elapsedRealtime base
+    // and refreshes the foreground ChronometerService so the live notification stays in sync.
+    fun startStopwatch() = StopwatchPrefs.start(context)
+
+    fun pauseStopwatch() = StopwatchPrefs.pause(context)
+
+    fun resetStopwatch() = StopwatchPrefs.reset(context)
+
+    fun recordLap() = StopwatchPrefs.lap(context)
+
+    // --- TIMER CONTROLLER (multiple concurrent persistent timers) ---
+    fun addTimer(durationMs: Long, label: String, toneName: String, toneUri: String, volume: Float) {
+        if (durationMs <= 0L) return
+        viewModelScope.launch {
+            TimerEngine.addAndStart(repository, context, durationMs, label, toneName, toneUri, volume)
         }
     }
 
-    fun pauseStopwatch() {
-        if (_stopwatchState.value != StopwatchState.RUNNING) return
-        
-        _stopwatchState.value = StopwatchState.PAUSED
-        stopwatchJob?.cancel()
-        stopwatchAccumulated = _stopwatchTime.value
-    }
+    fun pauseTimer(id: Int) = viewModelScope.launch { TimerEngine.pause(repository, context, id) }
 
-    fun resetStopwatch() {
-        stopwatchJob?.cancel()
-        _stopwatchState.value = StopwatchState.IDLE
-        stopwatchAccumulated = 0L
-        _stopwatchTime.value = 0L
-        _laps.value = emptyList()
-    }
+    fun resumeTimer(id: Int) = viewModelScope.launch { TimerEngine.resume(repository, context, id) }
 
-    fun recordLap() {
-        val totalElapsed = _stopwatchTime.value
-        val lapCount = _laps.value.size + 1
-        
-        val lastLapSplit = if (_laps.value.isEmpty()) 0L else _laps.value.first().splitTimeMs
-        val lapTime = totalElapsed - lastLapSplit
-        
-        val newLap = Lap(lapCount, totalElapsed, lapTime)
-        _laps.value = listOf(newLap) + _laps.value // Store in descending order to keep newest visible
-    }
+    fun addMinuteToTimer(id: Int) = viewModelScope.launch { TimerEngine.addMinute(repository, context, id) }
 
-    // --- TIMER CONTROLLER ---
-    fun setTimer(hours: Int, minutes: Int, seconds: Int) {
-        val ms = ((hours * 3600L) + (minutes * 60L) + seconds) * 1000L
-        _timerDuration.value = ms
-        _timerRemaining.value = ms
-        _timerState.value = TimerState.IDLE
-        timerJob?.cancel()
-    }
+    fun cancelTimer(id: Int) = viewModelScope.launch { TimerEngine.cancel(repository, context, id) }
 
-    fun startTimer() {
-        if (_timerState.value == TimerState.RUNNING || _timerRemaining.value <= 0L) return
-        
-        _timerState.value = TimerState.RUNNING
-        val timerTargetTime = System.currentTimeMillis() + _timerRemaining.value
-        
-        timerJob = viewModelScope.launch {
-            while (isActive) {
-                val rem = timerTargetTime - System.currentTimeMillis()
-                if (rem <= 0L) {
-                    _timerRemaining.value = 0L
-                    _timerState.value = TimerState.IDLE
-                    
-                    // Alert!
-                    ActiveAlarmState.triggerAlarm(
-                        context,
-                        ActiveAlarmState.ActiveAlarm(
-                            id = 99999,
-                            type = "ALARM",
-                            label = "Timer Finished",
-                            tone = "Cosmic Shimmer",
-                            volume = 0.8f
-                        )
-                    )
-                    break
-                }
-                _timerRemaining.value = rem
-                delay(50)
+    // Dismisses a finished timer: stop any ongoing ring and drop it from the list.
+    fun dismissTimer(id: Int) {
+        viewModelScope.launch {
+            try {
+                context.startService(AlarmService.stopIntent(context))
+            } catch (_: Exception) {
+                ActiveAlarmState.dismiss(context)
             }
+            repository.deleteTimerById(id)
+            ChronometerService.refresh(context)
         }
     }
 
-    fun pauseTimer() {
-        if (_timerState.value != TimerState.RUNNING) return
-        _timerState.value = TimerState.PAUSED
-        timerJob?.cancel()
+    // --- TIMER PRESETS ---
+    fun startTimerFromPreset(preset: TimerPreset) {
+        viewModelScope.launch {
+            TimerEngine.addAndStart(
+                repository, context, preset.durationMs, preset.label,
+                preset.toneName, preset.toneUri, preset.volume
+            )
+        }
     }
 
-    fun resetTimer() {
-        timerJob?.cancel()
-        _timerState.value = TimerState.IDLE
-        _timerRemaining.value = _timerDuration.value
+    fun addPreset(label: String, durationMs: Long, toneName: String, toneUri: String, volume: Float) {
+        if (durationMs <= 0L) return
+        viewModelScope.launch {
+            val order = (timerPresets.value.maxOfOrNull { it.sortOrder } ?: -1) + 1
+            repository.insertPreset(
+                TimerPreset(
+                    label = label.ifBlank { "Preset" },
+                    durationMs = durationMs,
+                    toneName = toneName,
+                    toneUri = toneUri,
+                    volume = volume,
+                    sortOrder = order
+                )
+            )
+        }
     }
+
+    fun deletePreset(preset: TimerPreset) = viewModelScope.launch { repository.deletePreset(preset) }
 }

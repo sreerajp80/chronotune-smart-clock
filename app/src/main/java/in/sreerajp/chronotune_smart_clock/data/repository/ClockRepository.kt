@@ -6,12 +6,18 @@ import `in`.sreerajp.chronotune_smart_clock.data.WorldClock
 import `in`.sreerajp.chronotune_smart_clock.data.WorldClockDao
 import `in`.sreerajp.chronotune_smart_clock.data.MusicSchedule
 import `in`.sreerajp.chronotune_smart_clock.data.MusicScheduleDao
+import `in`.sreerajp.chronotune_smart_clock.data.TimerItem
+import `in`.sreerajp.chronotune_smart_clock.data.TimerDao
+import `in`.sreerajp.chronotune_smart_clock.data.TimerPreset
+import `in`.sreerajp.chronotune_smart_clock.data.TimerPresetDao
 import kotlinx.coroutines.flow.Flow
 
 class ClockRepository(
     private val alarmDao: AlarmDao,
     private val worldClockDao: WorldClockDao,
-    private val musicScheduleDao: MusicScheduleDao
+    private val musicScheduleDao: MusicScheduleDao,
+    private val timerDao: TimerDao,
+    private val timerPresetDao: TimerPresetDao
 ) {
     // Alarms
     val allAlarms: Flow<List<Alarm>> = alarmDao.getAllAlarms()
@@ -41,4 +47,28 @@ class ClockRepository(
     suspend fun updateMusicSchedule(schedule: MusicSchedule) = musicScheduleDao.updateMusicSchedule(schedule)
     
     suspend fun deleteMusicSchedule(schedule: MusicSchedule) = musicScheduleDao.deleteMusicSchedule(schedule)
+
+    // Timers
+    val allTimers: Flow<List<TimerItem>> = timerDao.getAllTimers()
+
+    suspend fun getTimerById(id: Int): TimerItem? = timerDao.getTimerById(id)
+
+    suspend fun getAllTimersOnce(): List<TimerItem> = timerDao.getAllTimersOnce()
+
+    suspend fun insertTimer(timer: TimerItem): Long = timerDao.insertTimer(timer)
+
+    suspend fun updateTimer(timer: TimerItem) = timerDao.updateTimer(timer)
+
+    suspend fun deleteTimer(timer: TimerItem) = timerDao.deleteTimer(timer)
+
+    suspend fun deleteTimerById(id: Int) = timerDao.deleteTimerById(id)
+
+    // Timer presets
+    val allTimerPresets: Flow<List<TimerPreset>> = timerPresetDao.getAllPresets()
+
+    suspend fun insertPreset(preset: TimerPreset): Long = timerPresetDao.insertPreset(preset)
+
+    suspend fun updatePreset(preset: TimerPreset) = timerPresetDao.updatePreset(preset)
+
+    suspend fun deletePreset(preset: TimerPreset) = timerPresetDao.deletePreset(preset)
 }

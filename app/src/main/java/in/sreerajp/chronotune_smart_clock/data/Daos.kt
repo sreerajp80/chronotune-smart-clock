@@ -22,6 +22,45 @@ interface AlarmDao {
 }
 
 @Dao
+interface TimerDao {
+    @Query("SELECT * FROM timers ORDER BY createdAt ASC")
+    fun getAllTimers(): Flow<List<TimerItem>>
+
+    @Query("SELECT * FROM timers WHERE id = :id")
+    suspend fun getTimerById(id: Int): TimerItem?
+
+    @Query("SELECT * FROM timers")
+    suspend fun getAllTimersOnce(): List<TimerItem>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertTimer(timer: TimerItem): Long
+
+    @Update
+    suspend fun updateTimer(timer: TimerItem)
+
+    @Delete
+    suspend fun deleteTimer(timer: TimerItem)
+
+    @Query("DELETE FROM timers WHERE id = :id")
+    suspend fun deleteTimerById(id: Int)
+}
+
+@Dao
+interface TimerPresetDao {
+    @Query("SELECT * FROM timer_presets ORDER BY sortOrder ASC, id ASC")
+    fun getAllPresets(): Flow<List<TimerPreset>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPreset(preset: TimerPreset): Long
+
+    @Update
+    suspend fun updatePreset(preset: TimerPreset)
+
+    @Delete
+    suspend fun deletePreset(preset: TimerPreset)
+}
+
+@Dao
 interface WorldClockDao {
     @Query("SELECT * FROM world_clocks")
     fun getAllWorldClocks(): Flow<List<WorldClock>>

@@ -12,7 +12,11 @@ import kotlinx.coroutines.*
 import kotlin.coroutines.coroutineContext
 import kotlin.math.sin
 
-class AudioEngine(private val context: Context) {
+class AudioEngine(context: Context) {
+    // Always hold the application context so this engine can never leak an Activity, even when
+    // it is parked in the static ActiveAlarmState singleton.
+    private val context: Context = context.applicationContext
+
     private var mediaPlayer: MediaPlayer? = null
     private var synthJob: Job? = null
     private var playlistJob: Job? = null

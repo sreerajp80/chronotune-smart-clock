@@ -251,7 +251,13 @@ class AlarmService : Service() {
 
             val builder = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-                .setContentTitle(if (alarm.type == "ALARM") "Alarm Triggered" else "Auto Music Playing")
+                .setContentTitle(
+                    when (alarm.type) {
+                        "MUSIC" -> "Auto Music Playing"
+                        "TIMER" -> "Timer Finished"
+                        else -> "Alarm Triggered"
+                    }
+                )
                 .setContentText("${alarm.label} - Playing ${alarm.tone}")
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setCategory(NotificationCompat.CATEGORY_ALARM)
@@ -316,7 +322,13 @@ class AlarmService : Service() {
 
             return NotificationCompat.Builder(context, CHANNEL_ID_ACTIVE)
                 .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-                .setContentTitle(if (alarm.type == "ALARM") "Alarm Ringing" else "Auto Music Playing")
+                .setContentTitle(
+                    when (alarm.type) {
+                        "MUSIC" -> "Auto Music Playing"
+                        "TIMER" -> "Timer Finished"
+                        else -> "Alarm Ringing"
+                    }
+                )
                 .setContentText(alarm.label)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setCategory(NotificationCompat.CATEGORY_ALARM)

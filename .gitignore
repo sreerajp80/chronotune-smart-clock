@@ -19,7 +19,6 @@ build/
 
 # Local config (paths, SDK location, secrets)
 local.properties
-.env
 
 # Signing keys — NEVER commit
 *.jks

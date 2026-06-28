@@ -3,6 +3,7 @@ package `in`.sreerajp.chronotune_smart_clock.data
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import java.util.Calendar
+import java.util.Locale
 import java.util.TimeZone
 
 @Entity(tableName = "alarms")
@@ -26,7 +27,7 @@ data class Alarm(
 ) {
     fun getFormattedTime(is24Hour: Boolean = false): String {
         if (is24Hour) {
-            return String.format("%02d:%02d", hour, minute)
+            return String.format(Locale.getDefault(), "%02d:%02d", hour, minute)
         }
         val amPm = if (hour >= 12) "PM" else "AM"
         val displayHour = when {
@@ -34,7 +35,7 @@ data class Alarm(
             hour > 12 -> hour - 12
             else -> hour
         }
-        return String.format("%02d:%02d %s", displayHour, minute, amPm)
+        return String.format(Locale.getDefault(), "%02d:%02d %s", displayHour, minute, amPm)
     }
 
     fun getRepeatDaysList(): List<Int> {
@@ -76,6 +77,60 @@ data class Alarm(
     }
 }
 
+/**
+ * A single (possibly concurrent) countdown timer. Persisted so a running timer survives
+ * process death / screen-off.
+ *
+ * Two independent time bases are stored on purpose:
+ * - [endAtElapsed] uses [android.os.SystemClock.elapsedRealtime] (monotonic, immune to
+ *   wall-clock changes) and drives the smooth on-screen + notification countdown. It resets
+ *   on reboot, so it is recomputed from [remainingMs] when the process/boot restarts.
+ * - [fireAtWallClock] uses RTC ([System.currentTimeMillis]) and is what AlarmManager fires on,
+ *   so the ring survives backgrounding/Doze/reboot.
+ */
+@Entity(tableName = "timers")
+data class TimerItem(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val label: String = "",
+    val totalDurationMs: Long,          // original configured duration
+    val remainingMs: Long,              // remaining when PAUSED/IDLE; last-known otherwise
+    val endAtElapsed: Long = 0L,        // SystemClock.elapsedRealtime() target while RUNNING
+    val fireAtWallClock: Long = 0L,     // System.currentTimeMillis() target while RUNNING
+    val state: String = STATE_IDLE,     // IDLE | RUNNING | PAUSED | FINISHED
+    val toneName: String = "Cosmic Shimmer",
+    val toneUri: String = "",
+    val volume: Float = 0.8f,
+    val createdAt: Long = 0L
+) {
+    /** Remaining ms right now: derived from the elapsedRealtime base while RUNNING. */
+    fun currentRemaining(nowElapsed: Long): Long =
+        if (state == STATE_RUNNING) (endAtElapsed - nowElapsed).coerceAtLeast(0L)
+        else remainingMs.coerceAtLeast(0L)
+
+    companion object {
+        const val STATE_IDLE = "IDLE"
+        const val STATE_RUNNING = "RUNNING"
+        const val STATE_PAUSED = "PAUSED"
+        const val STATE_FINISHED = "FINISHED"
+
+        /** Offset applied to a timer id when used as an AlarmManager request code / ring ID,
+         *  keeping it distinct from alarm (id), music (id+10000) and snooze (id+50000/+100000). */
+        const val RING_ID_OFFSET = 200000
+    }
+}
+
+/** A reusable named timer configuration the user can start with one tap (e.g. "Tea 3 min"). */
+@Entity(tableName = "timer_presets")
+data class TimerPreset(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val label: String,
+    val durationMs: Long,
+    val toneName: String = "Cosmic Shimmer",
+    val toneUri: String = "",
+    val volume: Float = 0.8f,
+    val sortOrder: Int = 0
+)
+
 @Entity(tableName = "world_clocks")
 data class WorldClock(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
@@ -98,7 +153,7 @@ data class MusicSchedule(
 ) {
     fun getFormattedTime(is24Hour: Boolean = false): String {
         if (is24Hour) {
-            return String.format("%02d:%02d", hour, minute)
+            return String.format(Locale.getDefault(), "%02d:%02d", hour, minute)
         }
         val amPm = if (hour >= 12) "PM" else "AM"
         val displayHour = when {
@@ -106,7 +161,7 @@ data class MusicSchedule(
             hour > 12 -> hour - 12
             else -> hour
         }
-        return String.format("%02d:%02d %s", displayHour, minute, amPm)
+        return String.format(Locale.getDefault(), "%02d:%02d %s", displayHour, minute, amPm)
     }
 
     fun getRepeatDaysList(): List<Int> {
@@ -136,7 +191,7 @@ data class MusicSchedule(
             ambients.size == 1 && files.isEmpty() -> ambients.first()
             ambients.isEmpty() && files.size == 1 -> files.first().second
             ambients.isNotEmpty() && files.isEmpty() -> "${ambients.size} melodies"
-            ambients.isEmpty() && files.isNotEmpty() -> "${files.size} files"
+            ambients.isEmpty() -> "${files.size} files"
             else -> "${ambients.size} melodies + ${files.size} files"
         }
     }

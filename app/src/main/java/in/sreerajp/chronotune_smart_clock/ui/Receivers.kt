@@ -1,5 +1,6 @@
 package `in`.sreerajp.chronotune_smart_clock.ui
 
+import android.annotation.SuppressLint
 import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -12,9 +13,9 @@ import `in`.sreerajp.chronotune_smart_clock.data.repository.ClockRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 
 // Live React State that your MainActivity and screens can observe
 object ActiveAlarmState {
@@ -31,6 +32,9 @@ object ActiveAlarmState {
     private val _activeAlarm = MutableStateFlow<ActiveAlarm?>(null)
     val activeAlarm = _activeAlarm.asStateFlow()
 
+    // Safe to hold statically: AudioEngine only ever stores the application context (see its
+    // constructor), which lives for the whole process — so there is no Activity/Context leak.
+    @SuppressLint("StaticFieldLeak")
     private var audioEngine: AudioEngine? = null
 
     fun triggerAlarm(context: Context, alarm: ActiveAlarm) {
@@ -153,8 +157,34 @@ class AlarmReceiver : BroadcastReceiver() {
         // Hand off to a foreground service. The service owns the audio + notification +
         // activity launch so the process can't be reaped mid-alarm, dismiss reliably stops
         // playback, and the OS grants BAL exemption to launch the full-screen UI.
+        // For a TIMER the carried id is already offset (timer.id + RING_ID_OFFSET) so the
+        // AlarmService foreground-notification id can't collide with alarms/music.
         val alarm = ActiveAlarmState.ActiveAlarm(id, type, label, tone, volume, durationMin, uri)
         ContextCompat.startForegroundService(context, AlarmService.startIntent(context, alarm))
+
+        // A fired timer is a one-shot: mark it FINISHED in the DB and refresh the live
+        // stopwatch/timer notifications. The ring itself is handled by AlarmService above.
+        if (type == "TIMER") {
+            val timerId = intent.getIntExtra("TIMER_ID", -1)
+            if (timerId >= 0) {
+                val pending = goAsync()
+                val appContext = context.applicationContext
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        val db = AppDatabase.getDatabase(appContext)
+                        val repo = ClockRepository(
+                            db.alarmDao(), db.worldClockDao(), db.musicScheduleDao(),
+                            db.timerDao(), db.timerPresetDao()
+                        )
+                        TimerEngine.markFinished(repo, appContext, timerId)
+                    } catch (e: Exception) {
+                        Log.e("AlarmReceiver", "Failed to mark timer finished: ${e.message}")
+                    } finally {
+                        pending.finish()
+                    }
+                }
+            }
+        }
     }
 
     private fun isPausedNow(pauseStartMillis: Long, pauseEndMillis: Long): Boolean {
@@ -248,7 +278,10 @@ class BootReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val db = AppDatabase.getDatabase(appContext)
-                val repo = ClockRepository(db.alarmDao(), db.worldClockDao(), db.musicScheduleDao())
+                val repo = ClockRepository(
+                    db.alarmDao(), db.worldClockDao(), db.musicScheduleDao(),
+                    db.timerDao(), db.timerPresetDao()
+                )
                 val scheduler = AlarmScheduler(appContext)
 
                 repo.allAlarms.first().forEach { alarm ->
@@ -257,7 +290,10 @@ class BootReceiver : BroadcastReceiver() {
                 repo.allMusicSchedules.first().forEach { schedule ->
                     if (schedule.isEnabled) scheduler.scheduleMusic(schedule)
                 }
-                Log.d("BootReceiver", "Rescheduled alarms and music schedules")
+                // Re-arm running timers: elapsedRealtime reset on reboot, so recompute the
+                // display base from the persisted RTC target and re-schedule the ring.
+                TimerEngine.rescheduleAllAfterBoot(repo, appContext)
+                Log.d("BootReceiver", "Rescheduled alarms, music schedules and timers")
             } catch (e: Exception) {
                 Log.e("BootReceiver", "Failed to reschedule: ${e.message}")
             } finally {
