@@ -440,6 +440,14 @@ fun WorldClockItem(
                 )
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
+                val isDay = isDaytimeInZone(clock.timezoneId)
+                Icon(
+                    imageVector = if (isDay) Icons.Default.WbSunny else Icons.Default.DarkMode,
+                    contentDescription = if (isDay) "Daytime" else "Night",
+                    tint = if (isDay) Color(0xFFFFB300) else Color(0xFF7986CB),
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = getZoneTimeFormatted(referenceTime, clock.timezoneId, is24Hour),
                     fontSize = 18.sp,
@@ -474,7 +482,7 @@ fun LocationSearchDialog(
         } else {
             viewModel.availableCities.filter {
                 it.cityName.contains(searchQuery, ignoreCase = true) ||
-                it.country.contains(searchQuery, ignoreCase = true)
+                it.region.contains(searchQuery, ignoreCase = true)
             }
         }
     }
@@ -521,14 +529,24 @@ fun LocationSearchDialog(
                         ) {
                             Column {
                                 Text(city.cityName, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                                Text(city.country, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(city.region, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
-                            Text(
-                                text = getZoneOffsetFormatted(city.timezoneId),
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                val isDay = isDaytimeInZone(city.timezoneId)
+                                Icon(
+                                    imageVector = if (isDay) Icons.Default.WbSunny else Icons.Default.DarkMode,
+                                    contentDescription = if (isDay) "Daytime" else "Night",
+                                    tint = if (isDay) Color(0xFFFFB300) else Color(0xFF7986CB),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = getZoneOffsetFormatted(city.timezoneId),
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
                     }
@@ -559,9 +577,17 @@ fun getZoneTimeFormatted(timestamp: Long, zoneId: String, is24Hour: Boolean = fa
 fun getZoneOffsetFormatted(zoneId: String): String {
     val tz = TimeZone.getTimeZone(zoneId)
     val offsetMs = tz.getOffset(System.currentTimeMillis())
-    val offsetHrs = offsetMs / (3600 * 1000)
-    val prefix = if (offsetHrs >= 0) "+" else ""
-    return "GMT$prefix$offsetHrs"
+    val sign = if (offsetMs < 0) "-" else "+"
+    val totalMinutes = Math.abs(offsetMs) / (60 * 1000)
+    val hours = totalMinutes / 60
+    val minutes = totalMinutes % 60
+    return String.format(Locale.ROOT, "GMT%s%d:%02d", sign, hours, minutes)
+}
+
+// True when the given zone's local wall-clock time is daytime (06:00–17:59).
+fun isDaytimeInZone(zoneId: String): Boolean {
+    val cal = Calendar.getInstance(TimeZone.getTimeZone(zoneId))
+    return cal.get(Calendar.HOUR_OF_DAY) in 6..17
 }
 
 

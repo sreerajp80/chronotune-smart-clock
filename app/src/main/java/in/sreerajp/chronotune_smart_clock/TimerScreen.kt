@@ -167,7 +167,7 @@ fun TimerScreen(
             onClick = { showAddSheet = true },
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.primary,
-            contentColor = Color.White,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
             elevation = 10.dp,
             modifier = Modifier
                 .fillMaxWidth()
@@ -277,7 +277,7 @@ private fun TimerRow(
                     onClick = onDismiss,
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.primary,
-                    contentColor = Color.White,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
                     elevation = 4.dp,
                     modifier = Modifier
                         .weight(1f)
@@ -547,7 +547,7 @@ private fun AddTimerSheet(
                     enabled = totalMs > 0L,
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.primary,
-                    contentColor = Color.White,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
                     elevation = 8.dp,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -665,7 +665,7 @@ private fun AddTimerSheet(
                         onClick = { stopPreview(); screen = "main" },
                         shape = RoundedCornerShape(12.dp),
                         color = MaterialTheme.colorScheme.primary,
-                        contentColor = Color.White,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
                         elevation = 6.dp,
                         contentPadding = PaddingValues(horizontal = 26.dp, vertical = 11.dp)
                     ) { Text("Done", fontSize = 14.sp, fontWeight = FontWeight.Bold) }

@@ -110,7 +110,7 @@ internal fun RowScope.ToneTabChip(
             text = label,
             fontSize = 12.5.sp,
             fontWeight = FontWeight.SemiBold,
-            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
@@ -193,7 +193,7 @@ internal fun TonePickerRow(
             contentAlignment = Alignment.Center
         ) {
             if (playing) {
-                EqBars(color = Color.White)
+                EqBars(color = MaterialTheme.colorScheme.onPrimary)
             } else {
                 Icon(
                     imageVector = Icons.Default.PlayArrow,
@@ -240,7 +240,7 @@ internal fun TonePickerRow(
                 Icon(
                     imageVector = Icons.Default.Check,
                     contentDescription = "Selected",
-                    tint = Color.White,
+                    tint = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.size(14.dp)
                 )
             }

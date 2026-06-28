@@ -10,10 +10,13 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import `in`.sreerajp.chronotune_smart_clock.AppPrefs
 
 private val DarkColorScheme =
   darkColorScheme(
@@ -70,7 +73,9 @@ fun MyApplicationTheme(
   dynamicColor: Boolean = false,
   content: @Composable () -> Unit,
 ) {
-  val colorScheme =
+  val accentArgb by AppPrefs.accentColor.collectAsStateWithLifecycle()
+
+  val baseScheme =
     when {
       dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
         val context = LocalContext.current
@@ -79,6 +84,21 @@ fun MyApplicationTheme(
 
       darkTheme -> DarkColorScheme
       else -> LightColorScheme
+    }
+
+  // Apply the user's accent override (0 = keep the built-in palette as-is). onPrimary is
+  // contrast-derived so content stays legible on any chosen color.
+  val colorScheme =
+    if (accentArgb == AppPrefs.ACCENT_DEFAULT) {
+      baseScheme
+    } else {
+      val accent = Color(accentArgb)
+      baseScheme.copy(
+        primary = accent,
+        onPrimary = onColorFor(accent),
+        primaryContainer = deriveContainer(accent, darkTheme),
+        onPrimaryContainer = deriveOnContainer(accent, darkTheme)
+      )
     }
 
   // System status / navigation bar icon contrast tracking the active theme

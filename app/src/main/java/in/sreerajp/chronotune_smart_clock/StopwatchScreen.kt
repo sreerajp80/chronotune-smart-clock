@@ -130,7 +130,7 @@ fun StopwatchScreen(
                 },
                 shape = CircleShape,
                 color = swColor,
-                contentColor = Color.White,
+                contentColor = if (isRunning) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary,
                 elevation = 14.dp,
                 modifier = Modifier
                     .size(92.dp)

@@ -77,7 +77,7 @@ fun AlarmRingingOverlay(
                         imageVector = if (alarm.type == "ALARM") Icons.Default.NotificationsActive
                                       else Icons.Default.MusicNote,
                         contentDescription = "Ringing alarm icon",
-                        tint = Color.White,
+                        tint = if (alarm.type == "ALARM") Color.White else MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.size(48.dp)
                     )
                 }
@@ -123,7 +123,7 @@ fun AlarmRingingOverlay(
                     .height(60.dp)
                     .testTag("dismiss_ring_overlay_button"),
                 color = if (alarm.type == "ALARM") Color(0xFFD32F2F) else MaterialTheme.colorScheme.primary,
-                contentColor = Color.White,
+                contentColor = if (alarm.type == "ALARM") Color.White else MaterialTheme.colorScheme.onPrimary,
                 shape = RoundedCornerShape(30.dp),
                 elevation = 14.dp
             ) {

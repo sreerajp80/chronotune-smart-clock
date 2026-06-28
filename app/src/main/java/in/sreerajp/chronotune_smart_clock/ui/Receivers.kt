@@ -58,10 +58,18 @@ object ActiveAlarmState {
             if (playlist.isEmpty()) {
                 audioEngine?.playAudio(alarm.tone, alarm.uri, alarm.volume, durationMs)
             } else {
-                audioEngine?.playPlaylist(playlist, alarm.volume, durationMs)
+                // Music schedules honor the configurable crossfade settings (read straight from prefs
+                // so they're correct even in a cold process). getCrossfadeMs() returns 0 when disabled.
+                val xfMs = `in`.sreerajp.chronotune_smart_clock.AppPrefs.getCrossfadeMs(context)
+                val curve = `in`.sreerajp.chronotune_smart_clock.AppPrefs.getCrossfadeCurve(context)
+                val normalize = `in`.sreerajp.chronotune_smart_clock.AppPrefs.isLoudnessNormalize(context)
+                audioEngine?.playPlaylist(playlist, alarm.volume, durationMs, xfMs, curve, normalize)
             }
         } else {
-            audioEngine?.playAudio(alarm.tone, alarm.uri, alarm.volume, null)
+            // Alarms honor the global fade-in setting; read straight from prefs so it's correct
+            // even when we're firing in a cold process. Music (above) stays at flat volume.
+            val fadeInMs = `in`.sreerajp.chronotune_smart_clock.AppPrefs.getFadeInMs(context)
+            audioEngine?.playAudio(alarm.tone, alarm.uri, alarm.volume, null, fadeInMs)
         }
     }
 

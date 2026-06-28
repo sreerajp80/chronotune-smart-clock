@@ -5,6 +5,7 @@ import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import `in`.sreerajp.chronotune_smart_clock.AppPrefs
 import `in`.sreerajp.chronotune_smart_clock.StopwatchPrefs
 import `in`.sreerajp.chronotune_smart_clock.data.Alarm
 import `in`.sreerajp.chronotune_smart_clock.data.MusicSchedule
@@ -24,7 +25,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-data class CityZone(val cityName: String, val timezoneId: String, val country: String)
+data class CityZone(val cityName: String, val timezoneId: String, val region: String)
 
 class ClockViewModel(
     private val context: Context,
@@ -53,25 +54,39 @@ class ClockViewModel(
     private var tickerJob: Job? = null
     private var lastTriggeredMinute = -1
 
-    // Pre-seeded searchable major cities zone list
-    val availableCities = listOf(
-        CityZone("London", "Europe/London", "United Kingdom"),
-        CityZone("New York", "America/New_York", "United States"),
-        CityZone("Tokyo", "Asia/Tokyo", "Japan"),
-        CityZone("Mumbai", "Asia/Kolkata", "India"),
-        CityZone("Sydney", "Australia/Sydney", "Australia"),
-        CityZone("Paris", "Europe/Paris", "France"),
-        CityZone("Cairo", "Africa/Cairo", "Egypt"),
-        CityZone("Dubai", "Asia/Dubai", "United Arab Emirates"),
-        CityZone("Singapore", "Asia/Singapore", "Singapore"),
-        CityZone("São Paulo", "America/Sao_Paulo", "Brazil"),
-        CityZone("Moscow", "Europe/Moscow", "Russia"),
-        CityZone("Cape Town", "Africa/Johannesburg", "South Africa"),
-        CityZone("Los Angeles", "America/Los_Angeles", "United States"),
-        CityZone("Reykjavík", "Atlantic/Reykjavik", "Iceland"),
-        CityZone("Nairobi", "Africa/Nairobi", "Kenya"),
-        CityZone("Bangkok", "Asia/Bangkok", "Thailand")
-    )
+    // Full searchable zone catalog, built once from the IANA timezone database
+    // shipped with Android (TimeZone.getAvailableIDs() — API 1, unlike java.time's
+    // ZoneId which needs API 26). Filtered to clean "Region/City" entries and
+    // sorted by current UTC offset, then city name.
+    val availableCities: List<CityZone> by lazy {
+        // Real continent/ocean regions only — drops Etc/*, SystemV/*, US/*, and
+        // bare aliases (GMT, UTC, Egypt, Cuba, ...) so the picker stays clean.
+        val regions = setOf(
+            "Africa", "America", "Antarctica", "Arctic", "Asia",
+            "Atlantic", "Australia", "Europe", "Indian", "Pacific"
+        )
+        val now = System.currentTimeMillis()
+        java.util.TimeZone.getAvailableIDs()
+            .filter { id -> id.substringBefore('/') in regions && id.contains('/') }
+            .map { id ->
+                val segments = id.split('/')
+                val cityName = segments.last().replace('_', ' ')
+                // For 3-segment IDs (e.g. America/Argentina/Buenos_Aires) append the
+                // middle segment to disambiguate; otherwise just the continent.
+                val region = if (segments.size >= 3) {
+                    segments[0] + " · " + segments[1].replace('_', ' ')
+                } else {
+                    segments[0]
+                }
+                CityZone(cityName, id, region)
+            }
+            .sortedWith(
+                compareBy(
+                    { java.util.TimeZone.getTimeZone(it.timezoneId).getOffset(now) },
+                    { it.cityName }
+                )
+            )
+    }
 
     // --- STOPWATCH STATE (persistent: backed by StopwatchPrefs hub + ChronometerService) ---
     enum class StopwatchState { IDLE, RUNNING, PAUSED }
@@ -225,6 +240,7 @@ class ClockViewModel(
                 volume = volume,
                 isVibrate = isVibrate,
                 isEnabled = true,
+                snoozeMinutes = AppPrefs.getDefaultSnoozeMinutes(context),
                 pauseStartMillis = pauseStartMillis,
                 pauseEndMillis = pauseEndMillis
             )

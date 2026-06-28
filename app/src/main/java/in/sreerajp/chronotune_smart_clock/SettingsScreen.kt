@@ -20,6 +20,13 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import `in`.sreerajp.chronotune_smart_clock.audio.AudioEngine
+import `in`.sreerajp.chronotune_smart_clock.ui.theme.AccentSwatches
+import `in`.sreerajp.chronotune_smart_clock.ui.theme.ColorPickerDialog
+import `in`.sreerajp.chronotune_smart_clock.ui.theme.onColorFor
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.platform.LocalContext
@@ -41,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 
 // Config and URI helpers
 data class AppConfig(val architect: String, val author: String, val version: String)
@@ -152,6 +160,18 @@ fun SettingsScreen(
                     text = { Text("Permissions", fontWeight = FontWeight.Medium, fontSize = 13.sp) },
                     icon = { Icon(Icons.Default.Shield, contentDescription = "Permissions tab", modifier = Modifier.size(20.dp)) }
                 )
+                Tab(
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
+                    text = { Text("Alarm", fontWeight = FontWeight.Medium, fontSize = 13.sp) },
+                    icon = { Icon(Icons.Default.Alarm, contentDescription = "Alarm tab", modifier = Modifier.size(20.dp)) }
+                )
+                Tab(
+                    selected = selectedTab == 4,
+                    onClick = { selectedTab = 4 },
+                    text = { Text("Music", fontWeight = FontWeight.Medium, fontSize = 13.sp) },
+                    icon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Music tab", modifier = Modifier.size(20.dp)) }
+                )
             }
             
             Spacer(modifier = Modifier.height(16.dp))
@@ -261,6 +281,14 @@ fun SettingsScreen(
                                 checked = is24Hour,
                                 onCheckedChange = { AppPrefs.setIs24Hour(context, it) }
                             )
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            AccentColorCard(context = context)
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            WeekStartCard(context = context)
 
                             Spacer(modifier = Modifier.height(14.dp))
 
@@ -434,6 +462,548 @@ fun SettingsScreen(
                         )
                     }
                     }
+                    3 -> {
+                        // Page 4: Alarm behavior settings
+                        val fadeInEnabled by AppPrefs.fadeInEnabled.collectAsStateWithLifecycle()
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 18.dp, vertical = 4.dp)
+                        ) {
+                            ChunkyAppearanceToggle(
+                                icon = Icons.Default.GraphicEq,
+                                title = "Gradual volume (fade-in)",
+                                subtitle = if (fadeInEnabled) "Alarms ramp up over 20 seconds"
+                                           else "Alarms start at full volume",
+                                checked = fadeInEnabled,
+                                onCheckedChange = { AppPrefs.setFadeInEnabled(context, it) }
+                            )
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            Text(
+                                text = "When enabled, every alarm fades in gently from quiet to its set volume over about 20 seconds for a softer wake. Music schedules are unaffected.",
+                                fontSize = 11.5.sp,
+                                lineHeight = 17.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            DefaultSnoozeCard(context = context)
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            DefaultToneCard(context = context)
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Text(
+                                text = "Snooze length and tone apply to alarms you create from now on. Existing alarms keep their own settings.",
+                                fontSize = 11.5.sp,
+                                lineHeight = 17.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
+                    }
+                    4 -> {
+                        // Page 5: Music Scheduler — playlist crossfade settings
+                        MusicSchedulerSettings(context = context)
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+// Music Scheduler settings: how built-in tones / files blend across a Music schedule's playlist.
+@Composable
+private fun MusicSchedulerSettings(context: Context) {
+    val crossfadeEnabled by AppPrefs.crossfadeEnabled.collectAsStateWithLifecycle()
+    val crossfadeMs by AppPrefs.crossfadeMs.collectAsStateWithLifecycle()
+    val curve by AppPrefs.crossfadeCurve.collectAsStateWithLifecycle()
+    val normalize by AppPrefs.loudnessNormalize.collectAsStateWithLifecycle()
+
+    // Live slider position so dragging feels smooth; committed to prefs on drag-end.
+    var sliderMs by remember(crossfadeMs) { mutableIntStateOf(crossfadeMs) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 18.dp, vertical = 4.dp)
+    ) {
+        ChunkyAppearanceToggle(
+            icon = Icons.Default.Tune,
+            title = "Crossfade",
+            subtitle = if (crossfadeEnabled) "Items blend smoothly into each other"
+                       else "Items switch with a hard cut",
+            checked = crossfadeEnabled,
+            onCheckedChange = { AppPrefs.setCrossfadeEnabled(context, it) }
+        )
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Crossfade duration + curve — dimmed and disabled while crossfade is off.
+        Card(
+            modifier = Modifier.fillMaxWidth().alpha(if (crossfadeEnabled) 1f else 0.45f),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ChunkyIconTile(icon = Icons.Default.GraphicEq, contentDescription = "Crossfade duration")
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Crossfade length",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            lineHeight = 18.sp
+                        )
+                        Text(
+                            text = "Overlap between consecutive items.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 3.dp),
+                            lineHeight = 16.sp
+                        )
+                    }
+                    Text(
+                        text = String.format("%.1f s", sliderMs / 1000f),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                ChunkyValueSlider(
+                    fraction = sliderMs.toFloat() / AppPrefs.CROSSFADE_MAX_MS,
+                    enabled = crossfadeEnabled,
+                    onFraction = { f ->
+                        // Snap to 0.5 s steps for a tidy value.
+                        val ms = (f * AppPrefs.CROSSFADE_MAX_MS / 500).toInt() * 500
+                        sliderMs = ms.coerceIn(AppPrefs.CROSSFADE_MIN_MS, AppPrefs.CROSSFADE_MAX_MS)
+                    },
+                    onFractionFinished = { AppPrefs.setCrossfadeMs(context, sliderMs) }
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "Blend curve",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CurveChip(
+                        label = "Equal-power",
+                        selected = curve == AudioEngine.CrossfadeCurve.EQUAL_POWER,
+                        enabled = crossfadeEnabled
+                    ) { AppPrefs.setCrossfadeCurve(context, AudioEngine.CrossfadeCurve.EQUAL_POWER) }
+                    CurveChip(
+                        label = "Linear",
+                        selected = curve == AudioEngine.CrossfadeCurve.LINEAR,
+                        enabled = crossfadeEnabled
+                    ) { AppPrefs.setCrossfadeCurve(context, AudioEngine.CrossfadeCurve.LINEAR) }
+                }
+                Text(
+                    text = if (curve == AudioEngine.CrossfadeCurve.EQUAL_POWER)
+                               "Keeps loudness steady through the blend."
+                           else "Simple linear ramp; may dip slightly mid-blend.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
+                    lineHeight = 15.sp
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        ChunkyAppearanceToggle(
+            icon = Icons.Default.Equalizer,
+            title = "Loudness normalization",
+            subtitle = if (normalize) "Even out volume differences between items"
+                       else "Play each item at its own level",
+            checked = normalize,
+            onCheckedChange = { AppPrefs.setLoudnessNormalize(context, it) }
+        )
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        Text(
+            text = "These settings apply to Music schedules only — alarms are unaffected. Normalization matches levels using a quick scan of each file's start.",
+            fontSize = 11.5.sp,
+            lineHeight = 17.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+
+// Small selectable pill used for the crossfade curve choice.
+@Composable
+private fun CurveChip(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val bg = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface
+    val fg = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = bg,
+        border = BorderStroke(
+            1.dp,
+            if (selected) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+        ),
+        modifier = Modifier.clickable(enabled = enabled) { onClick() }
+    ) {
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = fg,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+        )
+    }
+}
+
+
+// ---- Alarm tab: default snooze length ----
+@Composable
+private fun DefaultSnoozeCard(context: Context) {
+    val snooze by AppPrefs.defaultSnoozeMinutes.collectAsStateWithLifecycle()
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ChunkyIconTile(icon = Icons.Default.Snooze, contentDescription = "Default snooze")
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = "Default snooze length",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 18.sp
+                    )
+                    Text(
+                        text = "Used when you snooze a new alarm.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp),
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                AppPrefs.SNOOZE_CHOICES.forEach { m ->
+                    CurveChip(
+                        label = "$m min",
+                        selected = snooze == m,
+                        enabled = true
+                    ) { AppPrefs.setDefaultSnoozeMinutes(context, m) }
+                }
+            }
+        }
+    }
+}
+
+
+// ---- Alarm tab: default alarm tone (built-in melodies only) ----
+@Composable
+private fun DefaultToneCard(context: Context) {
+    val tone by AppPrefs.defaultAlarmTone.collectAsStateWithLifecycle()
+    val tones = listOf(
+        "Morning Breeze" to "Soft ambient",
+        "Cosmic Shimmer" to "Dreamy synth",
+        "Ocean Zen" to "Ocean calm",
+        "Digital Alarm" to "Alert buzzer",
+        "Retro Chiptune" to "Upbeat scale",
+        "Deep Lofi Lounge" to "Soothing arpeggio"
+    )
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ChunkyIconTile(icon = Icons.Default.MusicNote, contentDescription = "Default tone")
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = "Default alarm tone",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 18.sp
+                    )
+                    Text(
+                        text = "Preselected when you create a new alarm.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp),
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            tones.forEach { (name, sub) ->
+                SelectableToneRow(
+                    name = name,
+                    sub = sub,
+                    selected = tone == name,
+                    onClick = { AppPrefs.setDefaultAlarmTone(context, name) }
+                )
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun SelectableToneRow(
+    name: String,
+    sub: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val primary = MaterialTheme.colorScheme.primary
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                if (selected) primary.copy(alpha = 0.12f) else Color.Transparent,
+                RoundedCornerShape(12.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = name,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (selected) primary else MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = sub,
+                fontSize = 11.5.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(if (selected) primary else Color.Transparent, CircleShape)
+                .border(
+                    2.dp,
+                    if (selected) primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                    CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = "Selected",
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+        }
+    }
+}
+
+
+// ---- Appearance tab: theme accent color ----
+@Composable
+private fun AccentColorCard(context: Context) {
+    val accent by AppPrefs.accentColor.collectAsStateWithLifecycle()
+    var showPicker by remember { mutableStateOf(false) }
+    val effective = if (accent == AppPrefs.ACCENT_DEFAULT) MaterialTheme.colorScheme.primary else Color(accent)
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ChunkyIconTile(icon = Icons.Default.Palette, contentDescription = "Accent color")
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Accent color",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 18.sp
+                    )
+                    Text(
+                        text = "Highlights buttons, toggles and selections.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp),
+                        lineHeight = 16.sp
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(effective, CircleShape)
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                AccentSwatches.forEach { c ->
+                    val isSel = accent != AppPrefs.ACCENT_DEFAULT && accent == c.toArgb()
+                    SwatchDot(color = c, selected = isSel) {
+                        AppPrefs.setAccentColor(context, c.toArgb())
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { showPicker = true }) {
+                    Icon(Icons.Default.Colorize, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Custom…")
+                }
+                if (accent != AppPrefs.ACCENT_DEFAULT) {
+                    TextButton(onClick = { AppPrefs.setAccentColor(context, AppPrefs.ACCENT_DEFAULT) }) {
+                        Text("Reset")
+                    }
+                }
+            }
+        }
+    }
+
+    if (showPicker) {
+        ColorPickerDialog(
+            initial = effective,
+            onDismiss = { showPicker = false },
+            onConfirm = {
+                AppPrefs.setAccentColor(context, it.toArgb())
+                showPicker = false
+            }
+        )
+    }
+}
+
+
+@Composable
+private fun SwatchDot(color: Color, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .background(color, CircleShape)
+            .border(
+                width = if (selected) 3.dp else 1.dp,
+                color = if (selected) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                shape = CircleShape
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        if (selected) {
+            Icon(
+                Icons.Default.Check,
+                contentDescription = "Selected",
+                tint = onColorFor(color),
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+
+// ---- Appearance tab: week-start day ----
+@Composable
+private fun WeekStartCard(context: Context) {
+    val start by AppPrefs.weekStartDay.collectAsStateWithLifecycle()
+    val options = listOf(1 to "Monday", 7 to "Sunday", 6 to "Saturday")
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ChunkyIconTile(icon = Icons.Default.DateRange, contentDescription = "Week start")
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = "Week starts on",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 18.sp
+                    )
+                    Text(
+                        text = "Orders the day picker in Alarms and Schedules.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp),
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                options.forEach { (num, label) ->
+                    CurveChip(
+                        label = label,
+                        selected = start == num,
+                        enabled = true
+                    ) { AppPrefs.setWeekStartDay(context, num) }
                 }
             }
         }
@@ -776,6 +1346,93 @@ private fun ChunkyOpacitySlider(
         }
 
         // Thumb — vertical bar sitting on the split line
+        drawRoundRect(
+            color = primary,
+            topLeft = Offset(thumbX - thumbW / 2f, centerY - thumbH / 2f),
+            size = Size(thumbW, thumbH),
+            cornerRadius = CornerRadius(thumbW / 2f, thumbW / 2f)
+        )
+    }
+}
+
+
+// Same chunky canvas track as the opacity slider, generalized to a 0..1 fraction with an enabled flag.
+@Composable
+private fun ChunkyValueSlider(
+    fraction: Float,
+    enabled: Boolean,
+    onFraction: (Float) -> Unit,
+    onFractionFinished: () -> Unit
+) {
+    val primary = MaterialTheme.colorScheme.primary
+    val remainingTrack = Color(0xFF4A2516)
+    val whiteDot = Color.White.copy(alpha = 0.40f)
+    val accentDot = primary.copy(alpha = 0.55f)
+    var trackWidthPx by remember { mutableFloatStateOf(0f) }
+
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(28.dp)
+            .onSizeChanged { trackWidthPx = it.width.toFloat() }
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                detectTapGestures { offset ->
+                    if (trackWidthPx > 0f) {
+                        onFraction((offset.x / trackWidthPx).coerceIn(0f, 1f))
+                        onFractionFinished()
+                    }
+                }
+            }
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                detectHorizontalDragGestures(
+                    onDragEnd = { onFractionFinished() }
+                ) { change, _ ->
+                    if (trackWidthPx > 0f) {
+                        onFraction((change.position.x / trackWidthPx).coerceIn(0f, 1f))
+                    }
+                }
+            }
+    ) {
+        val trackH = 8.dp.toPx()
+        val trackR = 6.dp.toPx()
+        val gap = 4.dp.toPx()
+        val thumbW = 2.dp.toPx()
+        val thumbH = 16.dp.toPx()
+        val dotR = 2.dp.toPx()
+        val centerY = size.height / 2f
+
+        val v = fraction.coerceIn(0f, 1f)
+        val thumbX = size.width * v
+
+        val leftEnd = (thumbX - thumbW / 2f - gap / 2f).coerceAtLeast(0f)
+        if (leftEnd > 0f) {
+            drawRoundRect(
+                color = primary,
+                topLeft = Offset(0f, centerY - trackH / 2f),
+                size = Size(leftEnd, trackH),
+                cornerRadius = CornerRadius(trackR, trackR)
+            )
+        }
+
+        val rightStart = (thumbX + thumbW / 2f + gap / 2f).coerceAtMost(size.width)
+        if (rightStart < size.width) {
+            drawRoundRect(
+                color = remainingTrack,
+                topLeft = Offset(rightStart, centerY - trackH / 2f),
+                size = Size(size.width - rightStart, trackH),
+                cornerRadius = CornerRadius(trackR, trackR)
+            )
+        }
+
+        if (leftEnd > dotR * 4) {
+            drawCircle(color = whiteDot, radius = dotR, center = Offset(leftEnd * 0.5f, centerY))
+        }
+        if (size.width - rightStart > dotR * 4) {
+            drawCircle(color = accentDot, radius = dotR, center = Offset((rightStart + size.width) / 2f, centerY))
+        }
+
         drawRoundRect(
             color = primary,
             topLeft = Offset(thumbX - thumbW / 2f, centerY - thumbH / 2f),

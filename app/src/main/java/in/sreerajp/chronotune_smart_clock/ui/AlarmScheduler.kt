@@ -9,7 +9,7 @@ import android.util.Log
 import `in`.sreerajp.chronotune_smart_clock.data.Alarm
 import `in`.sreerajp.chronotune_smart_clock.data.MusicSchedule
 import `in`.sreerajp.chronotune_smart_clock.data.TimerItem
-import java.util.Calendar
+import `in`.sreerajp.chronotune_smart_clock.data.nextTriggerTime
 
 class AlarmScheduler(private val context: Context) {
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -205,66 +205,6 @@ class AlarmScheduler(private val context: Context) {
             pendingIntent.cancel()
         }
     }
-
-    /**
-     * Computes the next time the alarm/schedule should fire.
-     *
-     * - When [repeatDays] is empty the alarm is a one-shot: today at hour:minute, or
-     *   tomorrow if that time has already passed.
-     * - When [repeatDays] is set (1=Monday … 7=Sunday, matching the model encoding) the
-     *   result is the soonest selected weekday at hour:minute that is still in the future.
-     * - When a pause window [pauseStartMillis]..[pauseEndMillis] is configured, any candidate
-     *   date that falls inside it is skipped so the alarm resumes only after the window ends.
-     */
-    private fun nextTriggerTime(
-        hour: Int,
-        minute: Int,
-        repeatDays: List<Int>,
-        pauseStartMillis: Long = 0L,
-        pauseEndMillis: Long = 0L
-    ): Calendar {
-        val calendar = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, hour)
-            set(Calendar.MINUTE, minute)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-
-        fun isPaused(cal: Calendar): Boolean {
-            if (pauseStartMillis <= 0L || pauseEndMillis <= 0L) return false
-            val day = Alarm.localCalendarToEpochDay(cal)
-            return day in (pauseStartMillis / Alarm.MILLIS_PER_DAY)..(pauseEndMillis / Alarm.MILLIS_PER_DAY)
-        }
-
-        if (repeatDays.isEmpty()) {
-            if (calendar.timeInMillis <= System.currentTimeMillis()) {
-                calendar.add(Calendar.DATE, 1)
-            }
-            // A one-shot landing inside the pause window is pushed to the day after it ends.
-            while (isPaused(calendar)) {
-                calendar.add(Calendar.DATE, 1)
-            }
-            return calendar
-        }
-
-        // Start from today; if today's time has already passed, begin scanning tomorrow.
-        if (calendar.timeInMillis <= System.currentTimeMillis()) {
-            calendar.add(Calendar.DATE, 1)
-        }
-        // Advance up to a year to land on the next selected weekday that isn't paused
-        // (a pause window can span longer than a single week).
-        repeat(366) {
-            if (repeatDays.contains(toModelDay(calendar.get(Calendar.DAY_OF_WEEK))) && !isPaused(calendar)) {
-                return calendar
-            }
-            calendar.add(Calendar.DATE, 1)
-        }
-        return calendar
-    }
-
-    // Converts Calendar.DAY_OF_WEEK (Sunday=1 … Saturday=7) to the model encoding (Monday=1 … Sunday=7).
-    private fun toModelDay(calendarDayOfWeek: Int): Int =
-        if (calendarDayOfWeek == Calendar.SUNDAY) 7 else calendarDayOfWeek - 1
 
     fun cancelMusic(schedule: MusicSchedule) {
         val intent = Intent(context, AlarmReceiver::class.java)

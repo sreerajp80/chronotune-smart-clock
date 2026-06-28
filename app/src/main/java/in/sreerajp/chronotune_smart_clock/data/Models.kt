@@ -6,25 +6,15 @@ import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
 
-@Entity(tableName = "alarms")
-data class Alarm(
-    @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    val hour: Int,                  // 0-23
-    val minute: Int,                // 0-59
-    val label: String = "",
-    val isEnabled: Boolean = true,
-    val daysOfWeek: String = "",    // "1,2,3,4,5,6,7" (1=Monday, 7=Sunday), empty = once
-    val customToneName: String = "Morning Breeze", // Built-in melody name
-    val customToneUri: String = "", // User chosen URI (if any)
-    val volume: Float = 0.8f,
-    val snoozeMinutes: Int = 5,
-    val isVibrate: Boolean = true,
-    // Pause window: while today falls within [pauseStartMillis, pauseEndMillis] the alarm is
-    // suppressed. Both are UTC-midnight millis (as produced by Material3 DateRangePicker);
-    // 0 means "no pause". Compared by epoch day to avoid timezone drift.
-    val pauseStartMillis: Long = 0L,
-    val pauseEndMillis: Long = 0L
-) {
+/**
+ * Shared behaviour for time-of-day, optionally-repeating schedules (alarms, music schedules).
+ * Implementers expose [hour]/[minute]/[daysOfWeek]; the formatting helpers are derived from them.
+ */
+interface Scheduled {
+    val hour: Int           // 0-23
+    val minute: Int         // 0-59
+    val daysOfWeek: String  // "1,2,3,4,5,6,7" (1=Monday...7=Sunday), empty = once
+
     fun getFormattedTime(is24Hour: Boolean = false): String {
         if (is24Hour) {
             return String.format(Locale.getDefault(), "%02d:%02d", hour, minute)
@@ -42,7 +32,27 @@ data class Alarm(
         if (daysOfWeek.isBlank()) return emptyList()
         return daysOfWeek.split(",").mapNotNull { it.toIntOrNull() }
     }
+}
 
+@Entity(tableName = "alarms")
+data class Alarm(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    override val hour: Int,                  // 0-23
+    override val minute: Int,                // 0-59
+    val label: String = "",
+    val isEnabled: Boolean = true,
+    override val daysOfWeek: String = "",    // "1,2,3,4,5,6,7" (1=Monday, 7=Sunday), empty = once
+    val customToneName: String = "Morning Breeze", // Built-in melody name
+    val customToneUri: String = "", // User chosen URI (if any)
+    val volume: Float = 0.8f,
+    val snoozeMinutes: Int = 5,
+    val isVibrate: Boolean = true,
+    // Pause window: while today falls within [pauseStartMillis, pauseEndMillis] the alarm is
+    // suppressed. Both are UTC-midnight millis (as produced by Material3 DateRangePicker);
+    // 0 means "no pause". Compared by epoch day to avoid timezone drift.
+    val pauseStartMillis: Long = 0L,
+    val pauseEndMillis: Long = 0L
+) : Scheduled {
     /** True when a pause window has been configured (both endpoints set). */
     fun isPauseConfigured(): Boolean = pauseStartMillis > 0L && pauseEndMillis > 0L
 
@@ -141,34 +151,16 @@ data class WorldClock(
 @Entity(tableName = "music_schedules")
 data class MusicSchedule(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    val hour: Int,
-    val minute: Int,
+    override val hour: Int,
+    override val minute: Int,
     val durationMinutes: Int = 30,
     val label: String = "",
     val isEnabled: Boolean = true,
-    val daysOfWeek: String = "",    // "1,2,3,4,5,6,7" (1=Monday...7=Sunday)
+    override val daysOfWeek: String = "",    // "1,2,3,4,5,6,7" (1=Monday...7=Sunday)
     val musicTrackName: String = "Lo-Fi Beats", // Newline-separated ambient melody names
     val customFileUri: String = "", // Newline-separated "uri\tDisplayName" entries
     val volume: Float = 0.6f
-) {
-    fun getFormattedTime(is24Hour: Boolean = false): String {
-        if (is24Hour) {
-            return String.format(Locale.getDefault(), "%02d:%02d", hour, minute)
-        }
-        val amPm = if (hour >= 12) "PM" else "AM"
-        val displayHour = when {
-            hour == 0 -> 12
-            hour > 12 -> hour - 12
-            else -> hour
-        }
-        return String.format(Locale.getDefault(), "%02d:%02d %s", displayHour, minute, amPm)
-    }
-
-    fun getRepeatDaysList(): List<Int> {
-        if (daysOfWeek.isBlank()) return emptyList()
-        return daysOfWeek.split(",").mapNotNull { it.toIntOrNull() }
-    }
-
+) : Scheduled {
     fun getAmbientTracks(): List<String> =
         if (musicTrackName.isBlank()) emptyList()
         else musicTrackName.split("\n").map { it.trim() }.filter { it.isNotBlank() }
