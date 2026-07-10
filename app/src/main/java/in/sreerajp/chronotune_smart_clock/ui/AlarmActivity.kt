@@ -1,7 +1,5 @@
 package `in`.sreerajp.chronotune_smart_clock.ui
 
-import android.app.KeyguardManager
-import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -43,17 +41,17 @@ class AlarmActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         // Ensure the activity is visible on the lock screen and turns the screen on.
+        // We deliberately do NOT request to dismiss the keyguard — showing over the
+        // lock screen is enough for the user to tap Dismiss/Snooze. Asking to dismiss
+        // a secure keyguard would force an unlock (PIN/pattern/fingerprint) prompt.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
-            val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
-            km?.requestDismissKeyguard(this, null)
         } else {
             @Suppress("DEPRECATION")
             window.addFlags(
                 android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                     android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                    android.view.WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
                     android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
             )
         }
