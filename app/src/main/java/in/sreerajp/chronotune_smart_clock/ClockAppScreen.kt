@@ -156,7 +156,9 @@ fun ClockAppScreen(
                     val snoozeId = ring.id
                     val snoozeLabel = ring.label
                     val snoozeTone = ring.tone
+                    val snoozeUri = ring.uri
                     val snoozeVolume = ring.volume
+                    val snoozeMinutes = ring.snoozeMinutes
                     try {
                         context.startService(AlarmService.stopIntent(context))
                     } catch (_: Exception) {
@@ -167,7 +169,9 @@ fun ClockAppScreen(
                         id = snoozeId,
                         label = snoozeLabel,
                         tone = snoozeTone,
-                        volume = snoozeVolume
+                        uri = snoozeUri,
+                        volume = snoozeVolume,
+                        snoozeMinutes = snoozeMinutes
                     )
                 }
             )

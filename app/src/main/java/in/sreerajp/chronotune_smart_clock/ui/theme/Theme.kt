@@ -7,13 +7,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.Density
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import `in`.sreerajp.chronotune_smart_clock.AppPrefs
@@ -74,6 +78,8 @@ fun MyApplicationTheme(
   content: @Composable () -> Unit,
 ) {
   val accentArgb by AppPrefs.accentColor.collectAsStateWithLifecycle()
+  val appFont by AppPrefs.appFont.collectAsStateWithLifecycle()
+  val userFontScale by AppPrefs.fontScale.collectAsStateWithLifecycle()
 
   val baseScheme =
     when {
@@ -112,5 +118,23 @@ fun MyApplicationTheme(
     }
   }
 
-  MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
+  // User font family: swap the whole Typography (Material components) and, below, LocalTextStyle
+  // (plain Text calls that don't set a family).
+  val fontFamily = fontFamilyFor(appFont)
+  val typography = appTypography(fontFamily)
+
+  // User font size: multiply onto the device's own fontScale so every `sp` in the app — including
+  // the many hardcoded ones — scales, while still respecting the system accessibility setting.
+  val baseDensity = LocalDensity.current
+  val scaledDensity = Density(
+    density = baseDensity.density,
+    fontScale = baseDensity.fontScale * userFontScale
+  )
+
+  CompositionLocalProvider(
+    LocalDensity provides scaledDensity,
+    LocalTextStyle provides LocalTextStyle.current.copy(fontFamily = fontFamily)
+  ) {
+    MaterialTheme(colorScheme = colorScheme, typography = typography, content = content)
+  }
 }

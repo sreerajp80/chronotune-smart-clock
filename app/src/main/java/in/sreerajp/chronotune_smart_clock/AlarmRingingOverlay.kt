@@ -136,7 +136,7 @@ fun AlarmRingingOverlay(
             }
 
             if (alarm.type == "ALARM") {
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(32.dp))
                 OutlinedButton(
                     onClick = onSnooze,
                     modifier = Modifier
@@ -147,7 +147,7 @@ fun AlarmRingingOverlay(
                     shape = RoundedCornerShape(26.dp)
                 ) {
                     Text(
-                        text = "SNOOZE (5 MIN)",
+                        text = "SNOOZE (${alarm.snoozeMinutes} MIN)",
                         color = Color.White,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,

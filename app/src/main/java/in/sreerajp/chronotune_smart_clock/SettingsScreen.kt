@@ -25,7 +25,12 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import `in`.sreerajp.chronotune_smart_clock.audio.AudioEngine
 import `in`.sreerajp.chronotune_smart_clock.ui.theme.AccentSwatches
+import `in`.sreerajp.chronotune_smart_clock.ui.theme.AppFont
 import `in`.sreerajp.chronotune_smart_clock.ui.theme.ColorPickerDialog
+import `in`.sreerajp.chronotune_smart_clock.ui.theme.FONT_SCALE_LABELS
+import `in`.sreerajp.chronotune_smart_clock.ui.theme.FONT_SCALE_STEPS
+import `in`.sreerajp.chronotune_smart_clock.ui.theme.fontFamilyFor
+import `in`.sreerajp.chronotune_smart_clock.ui.theme.fontScaleStepIndex
 import `in`.sreerajp.chronotune_smart_clock.ui.theme.onColorFor
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -285,6 +290,14 @@ fun SettingsScreen(
                             Spacer(modifier = Modifier.height(14.dp))
 
                             AccentColorCard(context = context)
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            FontFamilyCard(context = context)
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            FontSizeCard(context = context)
 
                             Spacer(modifier = Modifier.height(14.dp))
 
@@ -958,6 +971,162 @@ private fun SwatchDot(color: Color, selected: Boolean, onClick: () -> Unit) {
                 contentDescription = "Selected",
                 tint = onColorFor(color),
                 modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+
+// ---- Appearance tab: font family ----
+@Composable
+private fun FontFamilyCard(context: Context) {
+    val selected by AppPrefs.appFont.collectAsStateWithLifecycle()
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ChunkyIconTile(icon = Icons.Default.FontDownload, contentDescription = "Font")
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Font",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 18.sp
+                    )
+                    Text(
+                        text = "Typeface used across the whole app.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp),
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            AppFont.entries.forEach { font ->
+                FontRow(
+                    font = font,
+                    selected = font == selected,
+                    onClick = { AppPrefs.setAppFont(context, font) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FontRow(font: AppFont, selected: Boolean, onClick: () -> Unit) {
+    val border = if (selected) MaterialTheme.colorScheme.primary
+                 else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .border(
+                width = if (selected) 2.dp else 1.dp,
+                color = border,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .background(
+                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.07f)
+                else Color.Transparent
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Live preview: the font's own name rendered in that font.
+        Text(
+            text = font.displayName,
+            fontSize = 17.sp,
+            fontFamily = fontFamilyFor(font),
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f)
+        )
+        if (selected) {
+            Icon(
+                Icons.Default.CheckCircle,
+                contentDescription = "Selected",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+
+// ---- Appearance tab: font size ----
+@Composable
+private fun FontSizeCard(context: Context) {
+    val scale by AppPrefs.fontScale.collectAsStateWithLifecycle()
+    val lastIndex = FONT_SCALE_STEPS.lastIndex
+    var stepIndex by remember(scale) { mutableIntStateOf(fontScaleStepIndex(scale)) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ChunkyIconTile(icon = Icons.Default.FormatSize, contentDescription = "Font size")
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Font size",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 18.sp
+                    )
+                    Text(
+                        text = "Scales text everywhere in the app.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp),
+                        lineHeight = 16.sp
+                    )
+                }
+                Text(
+                    text = FONT_SCALE_LABELS[stepIndex],
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            ChunkyValueSlider(
+                fraction = if (lastIndex == 0) 0f else stepIndex.toFloat() / lastIndex,
+                enabled = true,
+                onFraction = { f ->
+                    stepIndex = Math.round(f * lastIndex).coerceIn(0, lastIndex)
+                },
+                onFractionFinished = {
+                    AppPrefs.setFontScale(context, FONT_SCALE_STEPS[stepIndex])
+                }
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "The quick brown fox jumps over the lazy dog.",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 20.sp
             )
         }
     }

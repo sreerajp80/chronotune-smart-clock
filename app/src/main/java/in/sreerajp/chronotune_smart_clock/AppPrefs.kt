@@ -2,6 +2,8 @@ package `in`.sreerajp.chronotune_smart_clock
 
 import android.content.Context
 import `in`.sreerajp.chronotune_smart_clock.audio.AudioEngine
+import `in`.sreerajp.chronotune_smart_clock.ui.theme.AppFont
+import `in`.sreerajp.chronotune_smart_clock.ui.theme.FONT_SCALE_DEFAULT
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,6 +20,12 @@ object AppPrefs {
     // App-wide appearance.
     private const val KEY_WEEK_START = "week_start_day"     // 1=Mon .. 7=Sun
     private const val KEY_ACCENT = "theme_accent_color"     // ARGB Int; 0 = use built-in theme default
+    private const val KEY_FONT = "app_font_family"          // AppFont.key; "system" = platform default
+    private const val KEY_FONT_SCALE = "app_font_scale"     // Float multiplier on LocalDensity.fontScale
+
+    // Font-size multiplier bounds (matches FONT_SCALE_STEPS in AppFonts.kt).
+    const val FONT_SCALE_MIN = 0.85f
+    const val FONT_SCALE_MAX = 1.30f
 
     // Default-snooze choices (minutes) and the fallback value.
     const val DEFAULT_SNOOZE_MINUTES = 5
@@ -79,6 +87,12 @@ object AppPrefs {
     private val _accentColor = MutableStateFlow(ACCENT_DEFAULT)
     val accentColor: StateFlow<Int> = _accentColor.asStateFlow()
 
+    private val _appFont = MutableStateFlow(AppFont.SYSTEM)
+    val appFont: StateFlow<AppFont> = _appFont.asStateFlow()
+
+    private val _fontScale = MutableStateFlow(FONT_SCALE_DEFAULT)
+    val fontScale: StateFlow<Float> = _fontScale.asStateFlow()
+
     fun init(context: Context) {
         _is24Hour.value = prefs(context).getBoolean(KEY_24H, false)
         _fadeInEnabled.value = prefs(context).getBoolean(KEY_FADE_IN, false)
@@ -90,6 +104,9 @@ object AppPrefs {
         _defaultAlarmTone.value = prefs(context).getString(KEY_DEFAULT_TONE, DEFAULT_TONE_NAME) ?: DEFAULT_TONE_NAME
         _weekStartDay.value = prefs(context).getInt(KEY_WEEK_START, WEEK_START_DEFAULT)
         _accentColor.value = prefs(context).getInt(KEY_ACCENT, ACCENT_DEFAULT)
+        _appFont.value = AppFont.fromKey(prefs(context).getString(KEY_FONT, AppFont.SYSTEM.key))
+        _fontScale.value = prefs(context).getFloat(KEY_FONT_SCALE, FONT_SCALE_DEFAULT)
+            .coerceIn(FONT_SCALE_MIN, FONT_SCALE_MAX)
     }
 
     fun setIs24Hour(context: Context, value: Boolean) {
@@ -143,6 +160,19 @@ object AppPrefs {
     fun setAccentColor(context: Context, argb: Int) {
         prefs(context).edit().putInt(KEY_ACCENT, argb).apply()
         _accentColor.value = argb
+    }
+
+    /** Set the app-wide font family. */
+    fun setAppFont(context: Context, font: AppFont) {
+        prefs(context).edit().putString(KEY_FONT, font.key).apply()
+        _appFont.value = font
+    }
+
+    /** Set the app-wide font-size multiplier, clamped to the supported range. */
+    fun setFontScale(context: Context, value: Float) {
+        val clamped = value.coerceIn(FONT_SCALE_MIN, FONT_SCALE_MAX)
+        prefs(context).edit().putFloat(KEY_FONT_SCALE, clamped).apply()
+        _fontScale.value = clamped
     }
 
     // ---- Cold-read getters (correct even before init(), e.g. an alarm firing in a cold process) ----

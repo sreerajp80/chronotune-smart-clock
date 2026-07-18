@@ -88,7 +88,9 @@ class AlarmActivity : ComponentActivity() {
                                 val snoozeId = ring.id
                                 val snoozeLabel = ring.label
                                 val snoozeTone = ring.tone
+                                val snoozeUri = ring.uri
                                 val snoozeVolume = ring.volume
+                                val snoozeMinutes = ring.snoozeMinutes
                                 try {
                                     startService(AlarmService.stopIntent(this@AlarmActivity))
                                 } catch (_: Exception) {
@@ -99,7 +101,9 @@ class AlarmActivity : ComponentActivity() {
                                     id = snoozeId,
                                     label = snoozeLabel,
                                     tone = snoozeTone,
-                                    volume = snoozeVolume
+                                    uri = snoozeUri,
+                                    volume = snoozeVolume,
+                                    snoozeMinutes = snoozeMinutes
                                 )
                                 finish()
                             }

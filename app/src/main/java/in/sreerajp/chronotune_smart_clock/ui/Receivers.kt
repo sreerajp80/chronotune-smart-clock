@@ -26,7 +26,8 @@ object ActiveAlarmState {
         val tone: String,
         val volume: Float,
         val durationMin: Int = 0,
-        val uri: String? = null
+        val uri: String? = null,
+        val snoozeMinutes: Int = 5
     )
 
     private val _activeAlarm = MutableStateFlow<ActiveAlarm?>(null)
@@ -92,6 +93,7 @@ object ActiveAlarmState {
             id = current.id,
             label = current.label,
             tone = current.tone,
+            uri = current.uri,
             volume = current.volume,
             snoozeMinutes = snoozeMinutes
         )
@@ -104,6 +106,7 @@ object ActiveAlarmState {
         id: Int,
         label: String,
         tone: String,
+        uri: String? = null,
         volume: Float,
         snoozeMinutes: Int = 5
     ) {
@@ -118,7 +121,11 @@ object ActiveAlarmState {
             label = "$label (Snoozed)",
             isEnabled = true,
             customToneName = tone,
-            volume = volume
+            // Carry the custom tone URI through so a picked-file / device-ringtone alarm
+            // keeps its own sound on snooze instead of falling back to the system default.
+            customToneUri = uri ?: "",
+            volume = volume,
+            snoozeMinutes = snoozeMinutes
         )
         scheduler.scheduleAlarm(tempAlarm)
     }
@@ -140,6 +147,7 @@ class AlarmReceiver : BroadcastReceiver() {
         val uri = intent.getStringExtra("URI") ?: ""
         val volume = intent.getFloatExtra("VOLUME", 0.8f)
         val durationMin = intent.getIntExtra("DURATION_MIN", 0)
+        val snoozeMin = intent.getIntExtra("SNOOZE_MIN", 5)
         val days = intent.getStringExtra("DAYS") ?: ""
         val pauseStart = intent.getLongExtra("PAUSE_START", 0L)
         val pauseEnd = intent.getLongExtra("PAUSE_END", 0L)
@@ -167,7 +175,7 @@ class AlarmReceiver : BroadcastReceiver() {
         // playback, and the OS grants BAL exemption to launch the full-screen UI.
         // For a TIMER the carried id is already offset (timer.id + RING_ID_OFFSET) so the
         // AlarmService foreground-notification id can't collide with alarms/music.
-        val alarm = ActiveAlarmState.ActiveAlarm(id, type, label, tone, volume, durationMin, uri)
+        val alarm = ActiveAlarmState.ActiveAlarm(id, type, label, tone, volume, durationMin, uri, snoozeMin)
         ContextCompat.startForegroundService(context, AlarmService.startIntent(context, alarm))
 
         // A fired timer is a one-shot: mark it FINISHED in the DB and refresh the live
@@ -343,7 +351,9 @@ class AlarmSnoozeReceiver : BroadcastReceiver() {
         val id = intent.getIntExtra("ID", notifId)
         val label = intent.getStringExtra("LABEL") ?: "Alarm"
         val tone = intent.getStringExtra("TONE") ?: "Morning Breeze"
+        val uri = intent.getStringExtra("URI") ?: ""
         val volume = intent.getFloatExtra("VOLUME", 0.8f)
+        val snoozeMin = intent.getIntExtra("SNOOZE_MIN", 5)
 
         // Tear down the currently-ringing alarm via the service (audio + notification +
         // foreground state all go together).
@@ -361,7 +371,9 @@ class AlarmSnoozeReceiver : BroadcastReceiver() {
             id = id,
             label = label,
             tone = tone,
-            volume = volume
+            uri = uri,
+            volume = volume,
+            snoozeMinutes = snoozeMin
         )
     }
 }

@@ -43,10 +43,11 @@ class AlarmService : Service() {
         val uri = intent?.getStringExtra(EXTRA_URI) ?: ""
         val volume = intent?.getFloatExtra(EXTRA_VOLUME, 0.8f) ?: 0.8f
         val durationMin = intent?.getIntExtra(EXTRA_DURATION_MIN, 0) ?: 0
+        val snoozeMin = intent?.getIntExtra(EXTRA_SNOOZE_MIN, 5) ?: 5
 
         Log.d(TAG, "Starting alarm service: id=$id type=$type")
 
-        val alarm = ActiveAlarmState.ActiveAlarm(id, type, label, tone, volume, durationMin, uri)
+        val alarm = ActiveAlarmState.ActiveAlarm(id, type, label, tone, volume, durationMin, uri, snoozeMin)
         currentAlarmId = id
         currentAlarm = alarm
 
@@ -159,6 +160,7 @@ class AlarmService : Service() {
         const val EXTRA_URI = "URI"
         const val EXTRA_VOLUME = "VOLUME"
         const val EXTRA_DURATION_MIN = "DURATION_MIN"
+        const val EXTRA_SNOOZE_MIN = "SNOOZE_MIN"
 
         private var currentAlarmId: Int = -1
         private var currentAlarm: ActiveAlarmState.ActiveAlarm? = null
@@ -172,6 +174,7 @@ class AlarmService : Service() {
                 putExtra(EXTRA_URI, alarm.uri ?: "")
                 putExtra(EXTRA_VOLUME, alarm.volume)
                 putExtra(EXTRA_DURATION_MIN, alarm.durationMin)
+                putExtra(EXTRA_SNOOZE_MIN, alarm.snoozeMinutes)
             }
 
         fun stopIntent(context: Context): Intent =
@@ -240,7 +243,9 @@ class AlarmService : Service() {
                 putExtra("ID", alarm.id)
                 putExtra("LABEL", alarm.label)
                 putExtra("TONE", alarm.tone)
+                putExtra("URI", alarm.uri ?: "")
                 putExtra("VOLUME", alarm.volume)
+                putExtra("SNOOZE_MIN", alarm.snoozeMinutes)
             }
             val snoozePending = PendingIntent.getBroadcast(
                 context,
