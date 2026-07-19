@@ -8,13 +8,21 @@ import android.os.Build
 import android.util.Log
 import `in`.sreerajp.chronotune_smart_clock.data.Alarm
 import `in`.sreerajp.chronotune_smart_clock.data.MusicSchedule
+import `in`.sreerajp.chronotune_smart_clock.data.SpecialDayRegistry
 import `in`.sreerajp.chronotune_smart_clock.data.TimerItem
 import `in`.sreerajp.chronotune_smart_clock.data.nextTriggerTime
 
 class AlarmScheduler(private val context: Context) {
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
-    fun scheduleAlarm(alarm: Alarm) {
+    /**
+     * Arms [alarm] at its next valid trigger time.
+     *
+     * [snoozeCount] is how many times this ring has already been snoozed. It is only non-zero
+     * when re-arming a snoozed alarm; a normal scheduled firing always starts back at 0, which
+     * is how the snooze allowance resets each day without any stored counter.
+     */
+    fun scheduleAlarm(alarm: Alarm, snoozeCount: Int = 0) {
         if (!alarm.isEnabled) return
 
         val intent = Intent(context, AlarmReceiver::class.java).apply {
@@ -26,6 +34,12 @@ class AlarmScheduler(private val context: Context) {
             putExtra("VOLUME", alarm.volume)
             putExtra("VIBRATE", alarm.isVibrate)
             putExtra("SNOOZE_MIN", alarm.snoozeMinutes)
+            // Carry the dismiss-challenge config so the ringing screen can enforce it.
+            putExtra("CHALLENGE", alarm.dismissChallenge)
+            putExtra("CHALLENGE_DIFFICULTY", alarm.challengeDifficulty)
+            putExtra("CHALLENGE_COUNT", alarm.challengeCount)
+            // Carry the per-alarm auto-silence length so the ringing service can stop itself.
+            putExtra("AUTO_SILENCE_MIN", alarm.autoSilenceMinutes)
             // Carry repeat-day info + time so the receiver can re-arm the next occurrence after firing.
             putExtra("DAYS", alarm.daysOfWeek)
             putExtra("HOUR", alarm.hour)
@@ -33,6 +47,19 @@ class AlarmScheduler(private val context: Context) {
             // Carry the pause window so the receiver can re-arm pause-aware after firing.
             putExtra("PAUSE_START", alarm.pauseStartMillis)
             putExtra("PAUSE_END", alarm.pauseEndMillis)
+            // Carry the skip-next day so the receiver keeps skipping it when it re-arms.
+            putExtra("SKIP_EPOCH_DAY", alarm.skipNextEpochDay)
+            // Carry the holiday mode; the day list itself can't ride in an Intent, so the
+            // receiver re-reads it from SpecialDayRegistry when it re-arms.
+            putExtra("HOLIDAY_MODE", alarm.holidayMode)
+            // Carry the snooze limit + style so the ringing UI and the snooze receiver can
+            // enforce them without a database read.
+            putExtra("MAX_SNOOZE_COUNT", alarm.maxSnoozeCount)
+            putExtra("SNOOZE_MODE", alarm.snoozeMode)
+            putExtra("SNOOZE_COUNT", snoozeCount)
+            // Carried so the receiver can keep the start date on a re-arm, and can tell a
+            // dated one-shot (which must switch itself off after ringing) from a plain one.
+            putExtra("START_EPOCH_DAY", alarm.startEpochDay)
         }
 
         val pendingIntent = PendingIntent.getBroadcast(
@@ -44,7 +71,8 @@ class AlarmScheduler(private val context: Context) {
 
         val calendar = nextTriggerTime(
             alarm.hour, alarm.minute, alarm.getRepeatDaysList(),
-            alarm.pauseStartMillis, alarm.pauseEndMillis
+            alarm.pauseStartMillis, alarm.pauseEndMillis, alarm.skipNextEpochDay,
+            alarm.holidayMode, SpecialDayRegistry::kindOf, alarm.startEpochDay
         )
 
         // setAlarmClock is the only AlarmManager API that grants the "user-facing alarm
@@ -155,6 +183,11 @@ class AlarmScheduler(private val context: Context) {
             putExtra("TONE", timer.toneName)
             putExtra("URI", timer.toneUri)
             putExtra("VOLUME", timer.volume)
+            // Timers use the global default auto-silence length (no per-timer editor for this).
+            putExtra(
+                "AUTO_SILENCE_MIN",
+                `in`.sreerajp.chronotune_smart_clock.AppPrefs.getDefaultAutoSilenceMinutes(context)
+            )
         }
 
         val pendingIntent = PendingIntent.getBroadcast(

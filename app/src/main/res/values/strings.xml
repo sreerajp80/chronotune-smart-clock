@@ -4,4 +4,34 @@
     <string name="widget_digital_clock_description">A clean digital time, seconds, and date readout.</string>
     <string name="widget_analog_clock_label">Chronos Analog</string>
     <string name="widget_analog_clock_description">The signature Chronos watch face on your home screen.</string>
+
+    <!-- Voice commands -->
+    <string name="voice_mic_description">Speak a command</string>
+    <string name="voice_prompt">Say something like "set an alarm for 7"</string>
+    <string name="voice_language_title">Voice command language</string>
+    <string name="voice_language_auto">Automatic</string>
+    <string name="voice_language_english">English</string>
+    <string name="voice_language_malayalam">Malayalam</string>
+    <string name="voice_no_recognizer">This phone has no speech app, so voice commands cannot be used.</string>
+
+    <string name="voice_heard">Heard: "%1$s"</string>
+    <string name="voice_confirm_title">Is this right?</string>
+    <string name="voice_confirm_save">Save</string>
+    <string name="voice_confirm_cancel">Cancel</string>
+    <string name="voice_not_understood_title">Sorry, I did not get that</string>
+    <string name="voice_examples_en">Try: "set an alarm for 7", "wake me up at 6:30 am", "set a timer for 10 minutes".</string>
+    <string name="voice_examples_ml">Try: "രാവിലെ 7 മണിക്ക് അലാറം വെക്കൂ", "10 മിനിറ്റ് ടൈമർ വെക്കൂ".</string>
+
+    <!-- Malayalam voice model notice -->
+    <string name="voice_ml_hint">Malayalam voice commands need the Malayalam voice model on your phone.</string>
+    <string name="voice_ml_missing_title">Malayalam speech is not installed</string>
+    <string name="voice_ml_missing_body">Your phone does not have the Malayalam voice model, so what you say will be heard in English. Add Malayalam in your phone\'s voice input settings to use Malayalam commands.</string>
+    <string name="voice_ml_maybe_missing_body">Your phone may not have the Malayalam voice model. If what you say keeps being heard in English, add Malayalam in your phone\'s voice input settings.</string>
+    <string name="voice_ml_open_settings">Open voice settings</string>
+    <string name="voice_ml_settings_unavailable">This phone has no voice input settings screen.</string>
+    <string name="voice_ok">OK</string>
+
+    <!-- Spoken results -->
+    <string name="voice_alarm_set">Alarm set for %1$s</string>
+    <string name="voice_timer_set">Timer started for %1$s</string>
 </resources>

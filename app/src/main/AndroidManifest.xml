@@ -7,6 +7,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Read-only, and requested only when the user taps "Import from calendar" on the
+         Holidays screen. Used to read all-day events out of a calendar the user picks
+         (typically a public-holiday subscription) into the holiday list. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- Needed on Android 14+ so a foreground-service-launched activity actually
          comes up while the screen is unlocked. Without it, startActivity() from
@@ -21,6 +25,17 @@
     <!-- Keeps a running stopwatch / countdown timer alive (live notification with controls).
          A clock/timer has no predefined FGS type, so it uses the "special use" type. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Package visibility (Android 11+): without these we cannot see the phone's speech
+         app, so voice commands and the "is Malayalam installed?" check would both fail. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.action.GET_LANGUAGE_DETAILS" />
+        </intent>
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -53,6 +68,27 @@
             android:excludeFromRecents="true"
             android:taskAffinity=""
             android:theme="@style/Theme.MyApplication" />
+
+        <!-- Standard clock actions, so Assistant and other voice apps can say
+             "set an alarm for 7" to this app. No UI of its own: it acts and finishes. -->
+        <activity
+            android:name="in.sreerajp.chronotune_smart_clock.ui.VoiceIntentActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SET_ALARM" />
+                <action android:name="android.intent.action.SET_TIMER" />
+                <action android:name="android.intent.action.SHOW_ALARMS" />
+                <action android:name="android.intent.action.SHOW_TIMERS" />
+                <action android:name="android.intent.action.DISMISS_ALARM" />
+                <action android:name="android.intent.action.SNOOZE_ALARM" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
 
         <receiver
             android:name="in.sreerajp.chronotune_smart_clock.widget.DigitalClockWidgetProvider"
@@ -98,6 +134,7 @@
         <receiver android:name="in.sreerajp.chronotune_smart_clock.ui.AlarmReceiver" android:enabled="true" android:exported="false" />
         <receiver android:name="in.sreerajp.chronotune_smart_clock.ui.AlarmDismissReceiver" android:enabled="true" android:exported="false" />
         <receiver android:name="in.sreerajp.chronotune_smart_clock.ui.AlarmSnoozeReceiver" android:enabled="true" android:exported="false" />
+        <receiver android:name="in.sreerajp.chronotune_smart_clock.ui.TimerAddMinuteReceiver" android:enabled="true" android:exported="false" />
         <receiver
             android:name="in.sreerajp.chronotune_smart_clock.ui.BootReceiver"
             android:enabled="true"

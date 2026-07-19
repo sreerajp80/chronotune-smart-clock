@@ -16,8 +16,8 @@ android {
     applicationId = "in.sreerajp.chronotune_smart_clock"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.10.11"
+    versionCode = 2
+    versionName = "2.10.11"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

@@ -18,7 +18,9 @@ import androidx.compose.ui.text.font.FontWeight
 import `in`.sreerajp.chronotune_smart_clock.ui.ClockViewModel
 import `in`.sreerajp.chronotune_smart_clock.ui.theme.Button3D
 import java.util.*
+import android.content.Intent
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -32,6 +34,7 @@ fun StopwatchScreen(
     val stopwatchTime by viewModel.stopwatchTime.collectAsStateWithLifecycle()
     val stopwatchState by viewModel.stopwatchState.collectAsStateWithLifecycle()
     val laps by viewModel.laps.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     Column(
         modifier = Modifier
@@ -50,11 +53,30 @@ fun StopwatchScreen(
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary
             )
-            IconButton(onClick = onOpenSettings) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = "Open Settings"
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Share / export the recorded laps as plain text (any app can receive it).
+                if (laps.isNotEmpty()) {
+                    IconButton(onClick = {
+                        val text = buildLapShareText(stopwatchTime, laps)
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_SUBJECT, "Stopwatch laps")
+                            putExtra(Intent.EXTRA_TEXT, text)
+                        }
+                        context.startActivity(Intent.createChooser(send, "Share laps"))
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Share laps"
+                        )
+                    }
+                }
+                IconButton(onClick = onOpenSettings) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Open Settings"
+                    )
+                }
             }
         }
         
@@ -205,6 +227,26 @@ fun StopwatchScreen(
             }
         }
     }
+}
+
+
+// Formats the recorded laps as a shareable plain-text summary.
+private fun buildLapShareText(totalMs: Long, laps: List<ClockViewModel.Lap>): String {
+    fun fmt(ms: Long): String {
+        val min = (ms / 60000) % 60
+        val sec = (ms / 1000) % 60
+        val centi = (ms / 10) % 100
+        return String.format(Locale.ROOT, "%02d:%02d.%02d", min, sec, centi)
+    }
+    val sb = StringBuilder()
+    sb.append("Stopwatch laps\n")
+    sb.append("Total: ").append(fmt(totalMs)).append('\n')
+    laps.forEach { lap ->
+        sb.append("Lap ").append(lap.number)
+            .append(" — ").append(fmt(lap.splitTimeMs))
+            .append(" (+").append(fmt(lap.lapTimeMs)).append(")\n")
+    }
+    return sb.toString().trimEnd()
 }
 
 

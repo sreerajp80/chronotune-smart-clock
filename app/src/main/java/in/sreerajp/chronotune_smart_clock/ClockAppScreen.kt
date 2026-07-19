@@ -19,9 +19,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 fun ClockAppScreen(
     viewModel: ClockViewModel,
     isDark: Boolean,
-    onToggleTheme: () -> Unit
+    onToggleTheme: () -> Unit,
+    // Which tab to land on. Changes when a voice intent ("show my alarms") reopens the app.
+    initialTab: Int = 0
 ) {
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab by remember { mutableIntStateOf(initialTab) }
+    LaunchedEffect(initialTab) { selectedTab = initialTab }
 
     var showSettings by remember { mutableStateOf(false) }
 
@@ -115,6 +118,7 @@ fun ClockAppScreen(
                 ) { isSettingsVisible ->
                     if (isSettingsVisible) {
                         SettingsScreen(
+                            viewModel = viewModel,
                             isDark = isDark,
                             onToggleTheme = onToggleTheme,
                             onBack = { showSettings = false }
@@ -123,9 +127,17 @@ fun ClockAppScreen(
                         // Main screens with their respective Settings button actions
                         when (selectedTab) {
                             0 -> WorldClockScreen(viewModel, isDark, onOpenSettings = { showSettings = true })
-                            1 -> AlarmsScreen(viewModel, onOpenSettings = { showSettings = true })
+                            1 -> AlarmsScreen(
+                                viewModel,
+                                onOpenSettings = { showSettings = true },
+                                onNavigateTab = { selectedTab = it }
+                            )
                             2 -> StopwatchScreen(viewModel, onOpenSettings = { showSettings = true })
-                            3 -> TimerScreen(viewModel, onOpenSettings = { showSettings = true })
+                            3 -> TimerScreen(
+                                viewModel,
+                                onOpenSettings = { showSettings = true },
+                                onNavigateTab = { selectedTab = it }
+                            )
                             4 -> MusicSchedulerScreen(viewModel, onOpenSettings = { showSettings = true })
                         }
                     }
@@ -171,7 +183,10 @@ fun ClockAppScreen(
                         tone = snoozeTone,
                         uri = snoozeUri,
                         volume = snoozeVolume,
-                        snoozeMinutes = snoozeMinutes
+                        snoozeMinutes = snoozeMinutes,
+                        dismissChallenge = ring.dismissChallenge,
+                        challengeDifficulty = ring.challengeDifficulty,
+                        challengeCount = ring.challengeCount
                     )
                 }
             )

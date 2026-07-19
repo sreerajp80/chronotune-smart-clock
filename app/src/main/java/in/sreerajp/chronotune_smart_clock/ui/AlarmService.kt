@@ -9,7 +9,9 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -23,6 +25,11 @@ import androidx.core.app.NotificationCompat
 class AlarmService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    // Posted when the ringing alarm has a non-zero auto-silence length; fires stopAlarmAndSelf()
+    // after that many minutes so the ring doesn't sound forever. Cancelled on any teardown.
+    private val autoSilenceHandler = Handler(Looper.getMainLooper())
+    private var autoSilenceRunnable: Runnable? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -44,10 +51,21 @@ class AlarmService : Service() {
         val volume = intent?.getFloatExtra(EXTRA_VOLUME, 0.8f) ?: 0.8f
         val durationMin = intent?.getIntExtra(EXTRA_DURATION_MIN, 0) ?: 0
         val snoozeMin = intent?.getIntExtra(EXTRA_SNOOZE_MIN, 5) ?: 5
+        val challenge = intent?.getStringExtra(EXTRA_CHALLENGE) ?: "NONE"
+        val challengeDifficulty = intent?.getStringExtra(EXTRA_CHALLENGE_DIFFICULTY) ?: "EASY"
+        val challengeCount = intent?.getIntExtra(EXTRA_CHALLENGE_COUNT, 1) ?: 1
+        val autoSilenceMin = intent?.getIntExtra(EXTRA_AUTO_SILENCE, 0) ?: 0
+        val maxSnoozeCount = intent?.getIntExtra(EXTRA_MAX_SNOOZE_COUNT, 0) ?: 0
+        val snoozeMode = intent?.getStringExtra(EXTRA_SNOOZE_MODE) ?: "FIXED"
+        val snoozeCount = intent?.getIntExtra(EXTRA_SNOOZE_COUNT, 0) ?: 0
 
         Log.d(TAG, "Starting alarm service: id=$id type=$type")
 
-        val alarm = ActiveAlarmState.ActiveAlarm(id, type, label, tone, volume, durationMin, uri, snoozeMin)
+        val alarm = ActiveAlarmState.ActiveAlarm(
+            id, type, label, tone, volume, durationMin, uri, snoozeMin,
+            challenge, challengeDifficulty, challengeCount, autoSilenceMin,
+            maxSnoozeCount, snoozeMode, snoozeCount
+        )
         currentAlarmId = id
         currentAlarm = alarm
 
@@ -64,6 +82,20 @@ class AlarmService : Service() {
             )
         } else {
             startForeground(id, notification)
+        }
+
+        // Auto-silence: if configured, stop the whole ring (audio + notification + foreground
+        // state) after the chosen number of minutes so it doesn't sound forever. Best-effort —
+        // if the OS reaps the process first, playback stops anyway. A snoozed alarm still rings
+        // again later as normal.
+        cancelAutoSilence()
+        if (autoSilenceMin > 0) {
+            val runnable = Runnable {
+                Log.d(TAG, "Auto-silencing alarm id=$id after $autoSilenceMin min")
+                stopAlarmAndSelf()
+            }
+            autoSilenceRunnable = runnable
+            autoSilenceHandler.postDelayed(runnable, autoSilenceMin * 60_000L)
         }
 
         // Wake the device briefly so audio + activity startup complete even when dozing.
@@ -120,7 +152,13 @@ class AlarmService : Service() {
         }
     }
 
+    private fun cancelAutoSilence() {
+        autoSilenceRunnable?.let { autoSilenceHandler.removeCallbacks(it) }
+        autoSilenceRunnable = null
+    }
+
     private fun stopAlarmAndSelf() {
+        cancelAutoSilence()
         ActiveAlarmState.dismiss(this)
         val id = currentAlarmId
         if (id != -1) {
@@ -141,6 +179,7 @@ class AlarmService : Service() {
     override fun onDestroy() {
         // Defensive: if the service is destroyed for any other reason (e.g. system kill),
         // make sure the audio engine is shut down so we don't leave dangling playback.
+        cancelAutoSilence()
         ActiveAlarmState.dismiss(this)
         super.onDestroy()
     }
@@ -161,6 +200,13 @@ class AlarmService : Service() {
         const val EXTRA_VOLUME = "VOLUME"
         const val EXTRA_DURATION_MIN = "DURATION_MIN"
         const val EXTRA_SNOOZE_MIN = "SNOOZE_MIN"
+        const val EXTRA_CHALLENGE = "CHALLENGE"
+        const val EXTRA_CHALLENGE_DIFFICULTY = "CHALLENGE_DIFFICULTY"
+        const val EXTRA_CHALLENGE_COUNT = "CHALLENGE_COUNT"
+        const val EXTRA_AUTO_SILENCE = "AUTO_SILENCE_MIN"
+        const val EXTRA_MAX_SNOOZE_COUNT = "MAX_SNOOZE_COUNT"
+        const val EXTRA_SNOOZE_MODE = "SNOOZE_MODE"
+        const val EXTRA_SNOOZE_COUNT = "SNOOZE_COUNT"
 
         private var currentAlarmId: Int = -1
         private var currentAlarm: ActiveAlarmState.ActiveAlarm? = null
@@ -175,6 +221,13 @@ class AlarmService : Service() {
                 putExtra(EXTRA_VOLUME, alarm.volume)
                 putExtra(EXTRA_DURATION_MIN, alarm.durationMin)
                 putExtra(EXTRA_SNOOZE_MIN, alarm.snoozeMinutes)
+                putExtra(EXTRA_CHALLENGE, alarm.dismissChallenge)
+                putExtra(EXTRA_CHALLENGE_DIFFICULTY, alarm.challengeDifficulty)
+                putExtra(EXTRA_CHALLENGE_COUNT, alarm.challengeCount)
+                putExtra(EXTRA_AUTO_SILENCE, alarm.autoSilenceMinutes)
+                putExtra(EXTRA_MAX_SNOOZE_COUNT, alarm.maxSnoozeCount)
+                putExtra(EXTRA_SNOOZE_MODE, alarm.snoozeMode)
+                putExtra(EXTRA_SNOOZE_COUNT, alarm.snoozeCount)
             }
 
         fun stopIntent(context: Context): Intent =
@@ -238,6 +291,12 @@ class AlarmService : Service() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
+            // When a dismiss challenge is set, the notification's Dismiss action must not stop
+            // the alarm outright (that would let the user skip the challenge from the shade).
+            // Instead it reopens the full-screen alarm, where the challenge is enforced.
+            val hasChallenge = alarm.type == "ALARM" && alarm.dismissChallenge != "NONE"
+            val dismissActionPending = if (hasChallenge) fullScreenPendingIntent else dismissPending
+
             val snoozeIntent = Intent(context, AlarmSnoozeReceiver::class.java).apply {
                 putExtra("NOTIFICATION_ID", alarm.id)
                 putExtra("ID", alarm.id)
@@ -246,6 +305,15 @@ class AlarmService : Service() {
                 putExtra("URI", alarm.uri ?: "")
                 putExtra("VOLUME", alarm.volume)
                 putExtra("SNOOZE_MIN", alarm.snoozeMinutes)
+                // Keep the challenge on the snoozed re-ring.
+                putExtra("CHALLENGE", alarm.dismissChallenge)
+                putExtra("CHALLENGE_DIFFICULTY", alarm.challengeDifficulty)
+                putExtra("CHALLENGE_COUNT", alarm.challengeCount)
+                putExtra("AUTO_SILENCE_MIN", alarm.autoSilenceMinutes)
+                // Carry the snooze allowance so the receiver can enforce the limit itself.
+                putExtra("MAX_SNOOZE_COUNT", alarm.maxSnoozeCount)
+                putExtra("SNOOZE_MODE", alarm.snoozeMode)
+                putExtra("SNOOZE_COUNT", alarm.snoozeCount)
             }
             val snoozePending = PendingIntent.getBroadcast(
                 context,
@@ -271,10 +339,34 @@ class AlarmService : Service() {
                 .setAutoCancel(false)
                 .setFullScreenIntent(fullScreenPendingIntent, true)
                 .setContentIntent(fullScreenPendingIntent)
-                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Dismiss", dismissPending)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Dismiss", dismissActionPending)
 
-            if (alarm.type == "ALARM") {
-                builder.addAction(android.R.drawable.ic_lock_idle_alarm, "Snooze", snoozePending)
+            // No Snooze action once the alarm has used up its allowance — showing a button that
+            // the receiver would refuse anyway is worse than not showing it at all.
+            if (alarm.type == "ALARM" && alarm.canSnooze()) {
+                val remaining = alarm.snoozesRemaining()
+                val snoozeLabel = if (remaining == null) {
+                    "Snooze"
+                } else {
+                    "Snooze (${alarm.nextSnoozeGapMinutes()}m, $remaining left)"
+                }
+                builder.addAction(android.R.drawable.ic_lock_idle_alarm, snoozeLabel, snoozePending)
+            }
+
+            // A finished timer's ring gets a "+1 min" action that stops the ring and restarts
+            // the timer for another minute. The timer id is the ring id minus the offset.
+            if (alarm.type == "TIMER") {
+                val timerId = alarm.id - `in`.sreerajp.chronotune_smart_clock.data.TimerItem.RING_ID_OFFSET
+                val addMinIntent = Intent(context, TimerAddMinuteReceiver::class.java).apply {
+                    putExtra("TIMER_ID", timerId)
+                }
+                val addMinPending = PendingIntent.getBroadcast(
+                    context,
+                    alarm.id + 300000,
+                    addMinIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                builder.addAction(android.R.drawable.ic_input_add, "+1 min", addMinPending)
             }
 
             return builder.build()
@@ -325,6 +417,11 @@ class AlarmService : Service() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
+            // Same challenge guard as the heads-up notification: when a challenge is set, the
+            // Dismiss action reopens the full-screen alarm instead of stopping it directly.
+            val hasChallenge = alarm.type == "ALARM" && alarm.dismissChallenge != "NONE"
+            val dismissActionPending = if (hasChallenge) openPending else dismissPending
+
             return NotificationCompat.Builder(context, CHANNEL_ID_ACTIVE)
                 .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
                 .setContentTitle(
@@ -342,7 +439,7 @@ class AlarmService : Service() {
                 .setAutoCancel(false)
                 .setOnlyAlertOnce(true)
                 .setContentIntent(openPending)
-                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Dismiss", dismissPending)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Dismiss", dismissActionPending)
                 .build()
         }
     }

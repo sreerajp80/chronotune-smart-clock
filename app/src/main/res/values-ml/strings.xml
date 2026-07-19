@@ -1,0 +1,31 @@
+<resources>
+    <!-- Voice commands -->
+    <string name="voice_mic_description">കമാൻഡ് പറയുക</string>
+    <string name="voice_prompt">"രാവിലെ 7 മണിക്ക് അലാറം വെക്കൂ" എന്ന് പറയാം</string>
+    <string name="voice_language_title">വോയ്സ് കമാൻഡ് ഭാഷ</string>
+    <string name="voice_language_auto">സ്വയമേവ</string>
+    <string name="voice_language_english">ഇംഗ്ലീഷ്</string>
+    <string name="voice_language_malayalam">മലയാളം</string>
+    <string name="voice_no_recognizer">ഈ ഫോണിൽ സ്പീച്ച് ആപ്പ് ഇല്ല, അതിനാൽ വോയ്സ് കമാൻഡ് ഉപയോഗിക്കാനാവില്ല.</string>
+
+    <string name="voice_heard">കേട്ടത്: "%1$s"</string>
+    <string name="voice_confirm_title">ഇത് ശരിയാണോ?</string>
+    <string name="voice_confirm_save">സേവ് ചെയ്യൂ</string>
+    <string name="voice_confirm_cancel">വേണ്ട</string>
+    <string name="voice_not_understood_title">ക്ഷമിക്കണം, മനസ്സിലായില്ല</string>
+    <string name="voice_examples_en">ഉദാഹരണം: "set an alarm for 7", "set a timer for 10 minutes".</string>
+    <string name="voice_examples_ml">ഉദാഹരണം: "രാവിലെ 7 മണിക്ക് അലാറം വെക്കൂ", "10 മിനിറ്റ് ടൈമർ വെക്കൂ".</string>
+
+    <!-- Malayalam voice model notice -->
+    <string name="voice_ml_hint">മലയാളം വോയ്സ് കമാൻഡിന് ഫോണിൽ മലയാളം വോയ്സ് മോഡൽ വേണം.</string>
+    <string name="voice_ml_missing_title">മലയാളം സ്പീച്ച് ഇൻസ്റ്റാൾ ചെയ്തിട്ടില്ല</string>
+    <string name="voice_ml_missing_body">നിങ്ങളുടെ ഫോണിൽ മലയാളം വോയ്സ് മോഡൽ ഇല്ല, അതിനാൽ പറയുന്നത് ഇംഗ്ലീഷായി കേൾക്കും. മലയാളം കമാൻഡ് ഉപയോഗിക്കാൻ ഫോണിന്റെ വോയ്സ് ഇൻപുട്ട് ക്രമീകരണത്തിൽ മലയാളം ചേർക്കുക.</string>
+    <string name="voice_ml_maybe_missing_body">നിങ്ങളുടെ ഫോണിൽ മലയാളം വോയ്സ് മോഡൽ ഇല്ലായിരിക്കാം. പറയുന്നത് ഇംഗ്ലീഷായി കേൾക്കുന്നെങ്കിൽ വോയ്സ് ഇൻപുട്ട് ക്രമീകരണത്തിൽ മലയാളം ചേർക്കുക.</string>
+    <string name="voice_ml_open_settings">വോയ്സ് ക്രമീകരണം തുറക്കൂ</string>
+    <string name="voice_ml_settings_unavailable">ഈ ഫോണിൽ വോയ്സ് ഇൻപുട്ട് ക്രമീകരണ സ്ക്രീൻ ഇല്ല.</string>
+    <string name="voice_ok">ശരി</string>
+
+    <!-- Spoken results -->
+    <string name="voice_alarm_set">%1$s ന് അലാറം വെച്ചു</string>
+    <string name="voice_timer_set">%1$s ടൈമർ തുടങ്ങി</string>
+</resources>

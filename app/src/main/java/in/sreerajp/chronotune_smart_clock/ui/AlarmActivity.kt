@@ -103,7 +103,10 @@ class AlarmActivity : ComponentActivity() {
                                     tone = snoozeTone,
                                     uri = snoozeUri,
                                     volume = snoozeVolume,
-                                    snoozeMinutes = snoozeMinutes
+                                    snoozeMinutes = snoozeMinutes,
+                                    dismissChallenge = ring.dismissChallenge,
+                                    challengeDifficulty = ring.challengeDifficulty,
+                                    challengeCount = ring.challengeCount
                                 )
                                 finish()
                             }

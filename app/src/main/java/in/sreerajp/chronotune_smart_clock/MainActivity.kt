@@ -38,16 +38,21 @@ class MainActivity : ComponentActivity() {
     private val repository by lazy {
         ClockRepository(
             database.alarmDao(), database.worldClockDao(), database.musicScheduleDao(),
-            database.timerDao(), database.timerPresetDao()
+            database.timerDao(), database.timerPresetDao(), database.specialDayDao()
         )
     }
     private val viewModel: ClockViewModel by viewModels {
         ClockViewModel.Factory(applicationContext, repository)
     }
 
+    // Which tab to show. A voice intent ("show my alarms") can change this while the
+    // activity is already running, which is why it is observable state.
+    private val openTab = mutableIntStateOf(TAB_CLOCK)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        openTab.intValue = intent?.getIntExtra(EXTRA_OPEN_TAB, TAB_CLOCK) ?: TAB_CLOCK
 
         AppPrefs.init(applicationContext)
 
@@ -130,10 +135,28 @@ class MainActivity : ComponentActivity() {
                         onToggleTheme = {
                             @Suppress("ASSIGNED_VALUE_IS_NEVER_READ")
                             darkThemeOverride = !isDark
-                        }
+                        },
+                        initialTab = openTab.intValue
                     )
                 }
             }
         }
+    }
+
+    // launchMode is singleTop, so a second voice intent arrives here rather than in onCreate.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openTab.intValue = intent.getIntExtra(EXTRA_OPEN_TAB, openTab.intValue)
+    }
+
+    companion object {
+        const val EXTRA_OPEN_TAB = "in.sreerajp.chronotune_smart_clock.OPEN_TAB"
+
+        const val TAB_CLOCK = 0
+        const val TAB_ALARMS = 1
+        const val TAB_STOPWATCH = 2
+        const val TAB_TIMER = 3
+        const val TAB_SCHEDULES = 4
     }
 }

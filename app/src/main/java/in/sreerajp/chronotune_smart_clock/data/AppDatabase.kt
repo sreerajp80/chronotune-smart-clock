@@ -8,8 +8,11 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Alarm::class, WorldClock::class, MusicSchedule::class, TimerItem::class, TimerPreset::class],
-    version = 3,
+    entities = [
+        Alarm::class, WorldClock::class, MusicSchedule::class, TimerItem::class,
+        TimerPreset::class, SpecialDay::class
+    ],
+    version = 9,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -18,6 +21,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun musicScheduleDao(): MusicScheduleDao
     abstract fun timerDao(): TimerDao
     abstract fun timerPresetDao(): TimerPresetDao
+    abstract fun specialDayDao(): SpecialDayDao
 
     companion object {
         @Volatile
@@ -70,6 +74,68 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // v3 -> v4: add the per-alarm dismiss-challenge columns (Math / Phrase / Memory
+        // wake-up tasks). Defaults keep every existing alarm on plain tap-to-dismiss.
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE alarms ADD COLUMN dismissChallenge TEXT NOT NULL DEFAULT 'NONE'")
+                db.execSQL("ALTER TABLE alarms ADD COLUMN challengeDifficulty TEXT NOT NULL DEFAULT 'EASY'")
+                db.execSQL("ALTER TABLE alarms ADD COLUMN challengeCount INTEGER NOT NULL DEFAULT 1")
+            }
+        }
+
+        // v4 -> v5: add the per-alarm auto-silence column. Default 0 = "Never" (ring until
+        // dismissed), so every existing alarm keeps today's behavior after upgrade.
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE alarms ADD COLUMN autoSilenceMinutes INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        // v5 -> v6: add the per-alarm skip-next-occurrence column. Default 0 = "not skipping",
+        // so every existing alarm keeps today's behavior after upgrade.
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE alarms ADD COLUMN skipNextEpochDay INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        // v6 -> v7: holiday / work-day awareness. Adds the shared `special_days` table and the
+        // per-alarm holidayMode column. Default 'ALL_DAYS' means every existing alarm ignores
+        // the day list, so behavior after upgrade is unchanged until the user opts in.
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `special_days` (
+                        `epochDay` INTEGER NOT NULL PRIMARY KEY,
+                        `name` TEXT NOT NULL DEFAULT '',
+                        `kind` TEXT NOT NULL DEFAULT 'HOLIDAY',
+                        `source` TEXT NOT NULL DEFAULT 'MANUAL'
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("ALTER TABLE alarms ADD COLUMN holidayMode TEXT NOT NULL DEFAULT 'ALL_DAYS'")
+            }
+        }
+
+        // v7 -> v8: snooze limit + progressive snooze. Defaults (0 = unlimited, FIXED gap)
+        // keep every existing alarm snoozing exactly as it does today.
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE alarms ADD COLUMN maxSnoozeCount INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE alarms ADD COLUMN snoozeMode TEXT NOT NULL DEFAULT 'FIXED'")
+            }
+        }
+
+        // v8 -> v9: per-alarm start date (and future-dated one-time alarms, which are the same
+        // column read differently). Default 0 = no start date, so existing alarms are unchanged.
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE alarms ADD COLUMN startEpochDay INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         // Shared starter presets used by the migration and the destructive-fallback callback.
         private fun seedPresets(db: SupportSQLiteDatabase) {
             fun insert(label: String, minutes: Long, order: Int) {
@@ -91,7 +157,10 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "clock_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(
+                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
+                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
+                )
                 .addCallback(object : Callback() {
                     // When the DB is created fresh (first install or after a destructive
                     // fallback), seed the same starter presets the migration would have added.

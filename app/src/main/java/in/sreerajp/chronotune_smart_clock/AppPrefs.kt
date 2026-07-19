@@ -7,6 +7,36 @@ import `in`.sreerajp.chronotune_smart_clock.ui.theme.FONT_SCALE_DEFAULT
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.Locale
+
+/**
+ * Which language the microphone listens in.
+ *
+ * [AUTO] follows the phone's own language, falling back to Indian English. Malayalam only
+ * works when the phone has the Malayalam voice model installed — see
+ * [in.sreerajp.chronotune_smart_clock.ui.VoiceLanguageSupport].
+ */
+enum class VoiceLanguage(val key: String, val displayName: String) {
+    AUTO("auto", "Automatic"),
+    ENGLISH("en", "English"),
+    MALAYALAM("ml", "Malayalam");
+
+    /** BCP-47 tag handed to the speech recogniser. */
+    fun toLanguageTag(): String = when (this) {
+        ENGLISH -> "en-IN"
+        MALAYALAM -> "ml-IN"
+        AUTO -> {
+            val device = Locale.getDefault()
+            if (device.language.equals("ml", ignoreCase = true)) "ml-IN"
+            else device.toLanguageTag().ifBlank { "en-IN" }
+        }
+    }
+
+    companion object {
+        fun fromKey(key: String?): VoiceLanguage =
+            entries.firstOrNull { it.key == key } ?: AUTO
+    }
+}
 
 object AppPrefs {
     private const val PREFS = "chronotune_app_prefs"
@@ -16,6 +46,9 @@ object AppPrefs {
     // Alarm creation defaults (seed new alarms only; existing alarms are untouched).
     private const val KEY_DEFAULT_SNOOZE = "alarm_default_snooze_minutes"
     private const val KEY_DEFAULT_TONE = "alarm_default_tone_name"
+    private const val KEY_DEFAULT_AUTO_SILENCE = "alarm_default_auto_silence_minutes"
+    private const val KEY_DEFAULT_MAX_SNOOZE = "alarm_default_max_snooze_count"
+    private const val KEY_DEFAULT_SNOOZE_MODE = "alarm_default_snooze_mode"
 
     // App-wide appearance.
     private const val KEY_WEEK_START = "week_start_day"     // 1=Mon .. 7=Sun
@@ -34,6 +67,16 @@ object AppPrefs {
     // Fallback built-in tone for new alarms.
     const val DEFAULT_TONE_NAME = "Morning Breeze"
 
+    // Auto-silence choices (minutes). 0 = Never (ring until dismissed). Used as the value
+    // seeded into a new alarm and as the auto-silence applied to timer rings.
+    const val DEFAULT_AUTO_SILENCE_MINUTES = 0
+
+    // 0 = unlimited snoozes, matching how the app has always behaved.
+    const val DEFAULT_MAX_SNOOZE_COUNT = 0
+    // FIXED = every snooze waits the same number of minutes.
+    const val DEFAULT_SNOOZE_MODE = "FIXED"
+    val AUTO_SILENCE_CHOICES = listOf(0, 1, 5, 10, 15)
+
     // Week-start options (Monday default). 1=Mon .. 7=Sun, matching Scheduled.daysOfWeek.
     const val WEEK_START_DEFAULT = 1
 
@@ -41,6 +84,9 @@ object AppPrefs {
     const val ACCENT_DEFAULT = 0
 
     // Music-schedule crossfade settings (alarms are unaffected).
+    private const val KEY_VOICE_LANG = "voice_command_language"   // VoiceLanguage.key
+    private const val KEY_VOICE_ML_NOTICE_SHOWN = "voice_malayalam_notice_shown"
+
     private const val KEY_XFADE_ENABLED = "music_crossfade_enabled"
     private const val KEY_XFADE_MS = "music_crossfade_ms"
     private const val KEY_XFADE_CURVE = "music_crossfade_curve" // "equal_power" | "linear"
@@ -81,6 +127,15 @@ object AppPrefs {
     private val _defaultAlarmTone = MutableStateFlow(DEFAULT_TONE_NAME)
     val defaultAlarmTone: StateFlow<String> = _defaultAlarmTone.asStateFlow()
 
+    private val _defaultAutoSilenceMinutes = MutableStateFlow(DEFAULT_AUTO_SILENCE_MINUTES)
+    val defaultAutoSilenceMinutes: StateFlow<Int> = _defaultAutoSilenceMinutes.asStateFlow()
+
+    private val _defaultMaxSnoozeCount = MutableStateFlow(DEFAULT_MAX_SNOOZE_COUNT)
+    val defaultMaxSnoozeCount: StateFlow<Int> = _defaultMaxSnoozeCount.asStateFlow()
+
+    private val _defaultSnoozeMode = MutableStateFlow(DEFAULT_SNOOZE_MODE)
+    val defaultSnoozeMode: StateFlow<String> = _defaultSnoozeMode.asStateFlow()
+
     private val _weekStartDay = MutableStateFlow(WEEK_START_DEFAULT)
     val weekStartDay: StateFlow<Int> = _weekStartDay.asStateFlow()
 
@@ -93,6 +148,9 @@ object AppPrefs {
     private val _fontScale = MutableStateFlow(FONT_SCALE_DEFAULT)
     val fontScale: StateFlow<Float> = _fontScale.asStateFlow()
 
+    private val _voiceLanguage = MutableStateFlow(VoiceLanguage.AUTO)
+    val voiceLanguage: StateFlow<VoiceLanguage> = _voiceLanguage.asStateFlow()
+
     fun init(context: Context) {
         _is24Hour.value = prefs(context).getBoolean(KEY_24H, false)
         _fadeInEnabled.value = prefs(context).getBoolean(KEY_FADE_IN, false)
@@ -102,11 +160,33 @@ object AppPrefs {
         _loudnessNormalize.value = prefs(context).getBoolean(KEY_NORMALIZE, false)
         _defaultSnoozeMinutes.value = prefs(context).getInt(KEY_DEFAULT_SNOOZE, DEFAULT_SNOOZE_MINUTES)
         _defaultAlarmTone.value = prefs(context).getString(KEY_DEFAULT_TONE, DEFAULT_TONE_NAME) ?: DEFAULT_TONE_NAME
+        _defaultAutoSilenceMinutes.value = prefs(context).getInt(KEY_DEFAULT_AUTO_SILENCE, DEFAULT_AUTO_SILENCE_MINUTES)
+        _defaultMaxSnoozeCount.value = prefs(context).getInt(KEY_DEFAULT_MAX_SNOOZE, DEFAULT_MAX_SNOOZE_COUNT)
+        _defaultSnoozeMode.value =
+            prefs(context).getString(KEY_DEFAULT_SNOOZE_MODE, DEFAULT_SNOOZE_MODE) ?: DEFAULT_SNOOZE_MODE
         _weekStartDay.value = prefs(context).getInt(KEY_WEEK_START, WEEK_START_DEFAULT)
         _accentColor.value = prefs(context).getInt(KEY_ACCENT, ACCENT_DEFAULT)
         _appFont.value = AppFont.fromKey(prefs(context).getString(KEY_FONT, AppFont.SYSTEM.key))
         _fontScale.value = prefs(context).getFloat(KEY_FONT_SCALE, FONT_SCALE_DEFAULT)
             .coerceIn(FONT_SCALE_MIN, FONT_SCALE_MAX)
+        _voiceLanguage.value = VoiceLanguage.fromKey(prefs(context).getString(KEY_VOICE_LANG, null))
+    }
+
+    /** Set the language the microphone listens in. */
+    fun setVoiceLanguage(context: Context, value: VoiceLanguage) {
+        prefs(context).edit().putString(KEY_VOICE_LANG, value.key).apply()
+        _voiceLanguage.value = value
+    }
+
+    /**
+     * Whether the one-off "Malayalam needs a voice model" dialog has already been shown.
+     * It appears the first time the user picks Malayalam and never nags again.
+     */
+    fun wasMalayalamVoiceNoticeShown(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_VOICE_ML_NOTICE_SHOWN, false)
+
+    fun markMalayalamVoiceNoticeShown(context: Context) {
+        prefs(context).edit().putBoolean(KEY_VOICE_ML_NOTICE_SHOWN, true).apply()
     }
 
     fun setIs24Hour(context: Context, value: Boolean) {
@@ -148,6 +228,24 @@ object AppPrefs {
     fun setDefaultAlarmTone(context: Context, value: String) {
         prefs(context).edit().putString(KEY_DEFAULT_TONE, value).apply()
         _defaultAlarmTone.value = value
+    }
+
+    fun setDefaultAutoSilenceMinutes(context: Context, value: Int) {
+        prefs(context).edit().putInt(KEY_DEFAULT_AUTO_SILENCE, value).apply()
+        _defaultAutoSilenceMinutes.value = value
+    }
+
+    /** Default snooze limit for newly created alarms. 0 = unlimited. */
+    fun setDefaultMaxSnoozeCount(context: Context, value: Int) {
+        val clamped = value.coerceIn(0, 10)
+        prefs(context).edit().putInt(KEY_DEFAULT_MAX_SNOOZE, clamped).apply()
+        _defaultMaxSnoozeCount.value = clamped
+    }
+
+    /** Default snooze style for newly created alarms: FIXED or PROGRESSIVE. */
+    fun setDefaultSnoozeMode(context: Context, value: String) {
+        prefs(context).edit().putString(KEY_DEFAULT_SNOOZE_MODE, value).apply()
+        _defaultSnoozeMode.value = value
     }
 
     fun setWeekStartDay(context: Context, value: Int) {
@@ -208,6 +306,18 @@ object AppPrefs {
     // Cold read for the default snooze length (used when creating an alarm).
     fun getDefaultSnoozeMinutes(context: Context): Int =
         prefs(context).getInt(KEY_DEFAULT_SNOOZE, DEFAULT_SNOOZE_MINUTES)
+
+    // Cold read for the default auto-silence length (used to seed new alarms and to
+    // auto-silence timer rings). 0 = Never.
+    fun getDefaultAutoSilenceMinutes(context: Context): Int =
+        prefs(context).getInt(KEY_DEFAULT_AUTO_SILENCE, DEFAULT_AUTO_SILENCE_MINUTES)
+
+    // Cold reads for the snooze defaults (used when creating an alarm).
+    fun getDefaultMaxSnoozeCount(context: Context): Int =
+        prefs(context).getInt(KEY_DEFAULT_MAX_SNOOZE, DEFAULT_MAX_SNOOZE_COUNT)
+
+    fun getDefaultSnoozeMode(context: Context): String =
+        prefs(context).getString(KEY_DEFAULT_SNOOZE_MODE, DEFAULT_SNOOZE_MODE) ?: DEFAULT_SNOOZE_MODE
 
     /**
      * The seven day-numbers (1=Mon .. 7=Sun) rotated so the list begins at [start].

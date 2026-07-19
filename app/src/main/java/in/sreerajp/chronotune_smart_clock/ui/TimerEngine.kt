@@ -109,6 +109,26 @@ object TimerEngine {
         }
     }
 
+    /**
+     * "+1 min" from the finished-timer ring: puts the timer back to RUNNING for 60 seconds from
+     * now and re-arms its AlarmManager ring, so tapping +1 min on the ring buys another minute.
+     * The caller is expected to have already stopped the current ring (via AlarmService.stop).
+     */
+    suspend fun restartForOneMinute(repo: ClockRepository, context: Context, id: Int) {
+        val timer = repo.getTimerById(id) ?: return
+        val extra = 60_000L
+        val updated = timer.copy(
+            state = TimerItem.STATE_RUNNING,
+            remainingMs = extra,
+            totalDurationMs = extra,
+            endAtElapsed = SystemClock.elapsedRealtime() + extra,
+            fireAtWallClock = System.currentTimeMillis() + extra
+        )
+        repo.updateTimer(updated)
+        AlarmScheduler(context).scheduleTimer(updated)
+        ChronometerService.refresh(context)
+    }
+
     /** Marks a fired timer as FINISHED (its ring is handled separately by the alarm path). */
     suspend fun markFinished(repo: ClockRepository, context: Context, id: Int) {
         val timer = repo.getTimerById(id) ?: return

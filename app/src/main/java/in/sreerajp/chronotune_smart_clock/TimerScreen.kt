@@ -49,7 +49,9 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 @Composable
 fun TimerScreen(
     viewModel: ClockViewModel,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    // Lets a spoken command that turns out to be an alarm move the user to the Alarms tab.
+    onNavigateTab: (Int) -> Unit = {}
 ) {
     val timers by viewModel.timers.collectAsStateWithLifecycle()
     val presets by viewModel.timerPresets.collectAsStateWithLifecycle()
@@ -73,11 +75,14 @@ fun TimerScreen(
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary
             )
-            IconButton(onClick = onOpenSettings) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = "Open Settings"
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                VoiceCommandMicButton(viewModel = viewModel, onNavigate = onNavigateTab)
+                IconButton(onClick = onOpenSettings) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Open Settings"
+                    )
+                }
             }
         }
 

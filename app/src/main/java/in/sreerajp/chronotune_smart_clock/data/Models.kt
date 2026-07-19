@@ -47,12 +47,68 @@ data class Alarm(
     val volume: Float = 0.8f,
     val snoozeMinutes: Int = 5,
     val isVibrate: Boolean = true,
+    // Dismiss challenge that must be completed before the alarm can be turned off.
+    // NONE (default) = plain tap Dismiss. MATH | PHRASE | MEMORY = a wake-up task.
+    val dismissChallenge: String = "NONE",
+    // EASY | MEDIUM | HARD. Scales the chosen challenge (number size for MATH,
+    // phrase length for PHRASE, tile count for MEMORY).
+    val challengeDifficulty: String = "EASY",
+    // How many challenge rounds must be solved in a row (1-10).
+    val challengeCount: Int = 1,
     // Pause window: while today falls within [pauseStartMillis, pauseEndMillis] the alarm is
     // suppressed. Both are UTC-midnight millis (as produced by Material3 DateRangePicker);
     // 0 means "no pause". Compared by epoch day to avoid timezone drift.
     val pauseStartMillis: Long = 0L,
-    val pauseEndMillis: Long = 0L
+    val pauseEndMillis: Long = 0L,
+    // How long the alarm keeps ringing before it silences itself. 0 = Never (ring until
+    // dismissed, the historical behavior); any other value stops the ring after that many
+    // minutes. New alarms seed this from the global default (AppPrefs.defaultAutoSilenceMinutes).
+    val autoSilenceMinutes: Int = 0,
+    // Skip-next-occurrence: the epoch day (same UTC-midnight basis as the pause window) of a
+    // single upcoming firing to skip. 0 = not skipping. Because every check compares this for
+    // exact epoch-day equality, a value only ever matches once; once that day has passed it can
+    // never equal a future candidate again, so a consumed value is permanently inert and never
+    // needs clearing (the UI only treats it as active while it is today-or-later).
+    val skipNextEpochDay: Long = 0L,
+    // How this alarm treats days marked in the shared `special_days` list.
+    // ALL_DAYS (default) = ignore the list entirely, i.e. the historical behavior.
+    // SKIP_HOLIDAYS = never ring on a day marked HOLIDAY.
+    // WORKDAYS_ONLY = never ring on a HOLIDAY, and additionally ring on a day marked
+    //   WORKING_DAY even when that weekday is not in daysOfWeek (compensatory work days).
+    val holidayMode: String = HOLIDAY_MODE_ALL_DAYS,
+    // Largest number of times this alarm may be snoozed before Snooze stops being offered.
+    // 0 = unlimited, the historical behavior. New alarms seed this from the global default
+    // (AppPrefs.defaultMaxSnoozeCount).
+    val maxSnoozeCount: Int = 0,
+    // FIXED = every snooze waits snoozeMinutes. PROGRESSIVE = each snooze is shorter than the
+    // last (see snoozeGapMinutes). New alarms seed this from AppPrefs.defaultSnoozeMode.
+    val snoozeMode: String = SNOOZE_MODE_FIXED,
+    // Earliest day this alarm is allowed to ring (same UTC-midnight epoch-day basis as the
+    // pause window). 0 = no start date, the historical behavior.
+    //
+    // What it means depends on whether the alarm repeats, which is why one field covers both
+    // features and no extra mode flag is needed:
+    //  - with repeat days: "don't begin yet" — the alarm skips every day before this one and
+    //    then follows its normal weekly pattern.
+    //  - with no repeat days (a one-shot): "ring on exactly this day" — this is the
+    //    future-dated one-time alarm.
+    //
+    // Like skipNextEpochDay, a value in the past is permanently inert: no future candidate day
+    // can ever be earlier than it, so it never needs clearing.
+    val startEpochDay: Long = 0L
 ) : Scheduled {
+
+    /** True when a start date has been set at all (past or future). */
+    fun hasStartDate(): Boolean = startEpochDay > 0L
+
+    /** True while the start date still lies ahead, i.e. the alarm has not begun yet. */
+    fun hasFutureStartDate(): Boolean = startEpochDay > todayEpochDay()
+
+    /**
+     * True when this alarm is a one-shot pinned to a specific date, rather than a repeating
+     * alarm that merely starts later. This is the "ring once on 3 March" case.
+     */
+    fun isDatedOneShot(): Boolean = hasStartDate() && daysOfWeek.isBlank()
     /** True when a pause window has been configured (both endpoints set). */
     fun isPauseConfigured(): Boolean = pauseStartMillis > 0L && pauseEndMillis > 0L
 
@@ -67,8 +123,28 @@ data class Alarm(
     /** True when today (local date) falls inside the configured pause window. */
     fun isPausedNow(): Boolean = isPausedOnEpochDay(todayEpochDay())
 
+    /** True when the given epoch day is the one upcoming firing marked to be skipped. */
+    fun isSkippedOnEpochDay(epochDay: Long): Boolean =
+        skipNextEpochDay > 0L && epochDay == skipNextEpochDay
+
+    /** True when today's occurrence is the one being skipped. */
+    fun isSkippedToday(): Boolean = isSkippedOnEpochDay(todayEpochDay())
+
+    /**
+     * True while a skip is still pending (today or a future day). A skip day that has already
+     * passed is treated as inactive — the UI shows nothing and the stored value is inert.
+     */
+    fun isSkippingActive(): Boolean = skipNextEpochDay >= todayEpochDay()
+
     companion object {
         const val MILLIS_PER_DAY: Long = 86_400_000L
+
+        const val HOLIDAY_MODE_ALL_DAYS = "ALL_DAYS"
+        const val HOLIDAY_MODE_SKIP_HOLIDAYS = "SKIP_HOLIDAYS"
+        const val HOLIDAY_MODE_WORKDAYS_ONLY = "WORKDAYS_ONLY"
+
+        const val SNOOZE_MODE_FIXED = "FIXED"
+        const val SNOOZE_MODE_PROGRESSIVE = "PROGRESSIVE"
 
         /**
          * Epoch day for a local calendar date, using the same basis as Material3's

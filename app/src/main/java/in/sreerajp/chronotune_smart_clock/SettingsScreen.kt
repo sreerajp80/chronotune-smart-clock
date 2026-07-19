@@ -23,7 +23,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import `in`.sreerajp.chronotune_smart_clock.audio.AudioEngine
+import `in`.sreerajp.chronotune_smart_clock.ui.VoiceLanguageSupport
 import `in`.sreerajp.chronotune_smart_clock.ui.theme.AccentSwatches
 import `in`.sreerajp.chronotune_smart_clock.ui.theme.AppFont
 import `in`.sreerajp.chronotune_smart_clock.ui.theme.ColorPickerDialog
@@ -43,6 +45,7 @@ import `in`.sreerajp.chronotune_smart_clock.widget.DigitalClockWidgetProvider
 import `in`.sreerajp.chronotune_smart_clock.widget.WidgetPrefs
 import android.app.AlarmManager
 import java.io.InputStream
+import java.util.Locale
 import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
@@ -53,7 +56,10 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.activity.compose.BackHandler
+import androidx.compose.ui.graphics.vector.ImageVector
 
 // Config and URI helpers
 data class AppConfig(val architect: String, val author: String, val version: String)
@@ -79,16 +85,32 @@ private fun loadConfig(context: Context): AppConfig {
 }
 
 
+// The settings hub is a list of cards; each card opens one of these pages.
+private enum class SettingsSection(
+    val title: String,
+    val subtitle: String,
+    val icon: ImageVector
+) {
+    ABOUT("About", "App details, backup and restore", Icons.Default.Info),
+    APPEARANCE("Appearance", "Theme, accent colour, fonts and widgets", Icons.Default.Palette),
+    PERMISSIONS("Permissions", "Notification and exact alarm access", Icons.Default.Shield),
+    ALARM("Alarm", "Fade-in, snooze, auto-silence and tone", Icons.Default.Alarm),
+    HOLIDAYS("Holidays & work days", "Days your alarms can skip or work through", Icons.Default.BeachAccess),
+    MUSIC("Music", "Crossfade and loudness for playlists", Icons.AutoMirrored.Filled.QueueMusic)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
+    viewModel: `in`.sreerajp.chronotune_smart_clock.ui.ClockViewModel,
     isDark: Boolean,
     onToggleTheme: () -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    var selectedTab by remember { mutableIntStateOf(0) }
-    
+    // null means the hub (card list) is showing.
+    var openSection by remember { mutableStateOf<SettingsSection?>(null) }
+
     // Dynamic permissions check states
     var hasNotifications by remember { mutableStateOf(false) }
     var hasExactAlarm by remember { mutableStateOf(false) }
@@ -119,12 +141,21 @@ fun SettingsScreen(
         }
     }
     
+    // Device back returns to the hub first, and only then leaves settings.
+    BackHandler(enabled = openSection != null) { openSection = null }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings & Info", fontWeight = FontWeight.Bold, fontSize = 20.sp) },
+                title = {
+                    Text(
+                        openSection?.title ?: "Settings & Info",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp
+                    )
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { if (openSection != null) openSection = null else onBack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Go Back")
                     }
                 },
@@ -141,49 +172,13 @@ fun SettingsScreen(
                 .padding(innerPadding)
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            // High-end Material 3 Tabs switcher
-            PrimaryTabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = MaterialTheme.colorScheme.background,
-                contentColor = MaterialTheme.colorScheme.primary
-            ) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = { Text("About", fontWeight = FontWeight.Medium, fontSize = 13.sp) },
-                    icon = { Icon(Icons.Default.Info, contentDescription = "About tab", modifier = Modifier.size(20.dp)) }
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = { Text("Appearance", fontWeight = FontWeight.Medium, fontSize = 13.sp) },
-                    icon = { Icon(Icons.Default.Palette, contentDescription = "Appearance tab", modifier = Modifier.size(20.dp)) }
-                )
-                Tab(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    text = { Text("Permissions", fontWeight = FontWeight.Medium, fontSize = 13.sp) },
-                    icon = { Icon(Icons.Default.Shield, contentDescription = "Permissions tab", modifier = Modifier.size(20.dp)) }
-                )
-                Tab(
-                    selected = selectedTab == 3,
-                    onClick = { selectedTab = 3 },
-                    text = { Text("Alarm", fontWeight = FontWeight.Medium, fontSize = 13.sp) },
-                    icon = { Icon(Icons.Default.Alarm, contentDescription = "Alarm tab", modifier = Modifier.size(20.dp)) }
-                )
-                Tab(
-                    selected = selectedTab == 4,
-                    onClick = { selectedTab = 4 },
-                    text = { Text("Music", fontWeight = FontWeight.Medium, fontSize = 13.sp) },
-                    icon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Music tab", modifier = Modifier.size(20.dp)) }
-                )
-            }
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            Box(modifier = Modifier.weight(1f)) {
-                when (selectedTab) {
-                    0 -> {
+            val section = openSection
+            if (section == null) {
+                SettingsHub(onOpen = { openSection = it })
+            } else {
+                Box(modifier = Modifier.weight(1f)) {
+                    when (section) {
+                    SettingsSection.ABOUT -> {
                     // Page 1: About Page
                     Column(
                         modifier = Modifier
@@ -251,7 +246,11 @@ fun SettingsScreen(
                             badgeColor = MaterialTheme.colorScheme.tertiary
                         )
                         
-                        Spacer(modifier = Modifier.height(32.dp))
+                        Spacer(modifier = Modifier.height(24.dp))
+
+                        BackupRestoreCard(context = context, viewModel = viewModel)
+
+                        Spacer(modifier = Modifier.height(24.dp))
                         Text(
                             text = "Project framework designed under bespoke modern patterns.",
                             fontSize = 10.sp,
@@ -259,7 +258,7 @@ fun SettingsScreen(
                         )
                     }
                     }
-                    1 -> {
+                    SettingsSection.APPEARANCE -> {
                         // Page 2: Appearance — V1 refined chunky cards
                         val is24Hour by AppPrefs.is24Hour.collectAsStateWithLifecycle()
                         Column(
@@ -305,6 +304,10 @@ fun SettingsScreen(
 
                             Spacer(modifier = Modifier.height(14.dp))
 
+                            VoiceLanguageCard(context = context)
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
                             Text(
                                 text = "Theme and time format apply to every screen — Clock, Alarms, Stopwatch, Timer, and Schedules.",
                                 fontSize = 11.5.sp,
@@ -330,7 +333,7 @@ fun SettingsScreen(
                             Spacer(modifier = Modifier.height(16.dp))
                         }
                     }
-                    2 -> {
+                    SettingsSection.PERMISSIONS -> {
                     // Page 3: System Permissions lists
                     Column(
                         modifier = Modifier
@@ -475,7 +478,7 @@ fun SettingsScreen(
                         )
                     }
                     }
-                    3 -> {
+                    SettingsSection.ALARM -> {
                         // Page 4: Alarm behavior settings
                         val fadeInEnabled by AppPrefs.fadeInEnabled.collectAsStateWithLifecycle()
                         Column(
@@ -509,12 +512,24 @@ fun SettingsScreen(
 
                             Spacer(modifier = Modifier.height(14.dp))
 
+                            DefaultAutoSilenceCard(context = context)
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            DefaultMaxSnoozeCard(context = context)
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            DefaultSnoozeModeCard(context = context)
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
                             DefaultToneCard(context = context)
 
                             Spacer(modifier = Modifier.height(12.dp))
 
                             Text(
-                                text = "Snooze length and tone apply to alarms you create from now on. Existing alarms keep their own settings.",
+                                text = "Snooze length, snooze limit, snooze style, auto-silence and tone apply to alarms you create from now on. Existing alarms keep their own settings. Timers use the auto-silence value too.",
                                 fontSize = 11.5.sp,
                                 lineHeight = 17.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
@@ -524,12 +539,90 @@ fun SettingsScreen(
                             Spacer(modifier = Modifier.height(16.dp))
                         }
                     }
-                    4 -> {
-                        // Page 5: Music Scheduler — playlist crossfade settings
+                    SettingsSection.HOLIDAYS -> {
+                        // Page 5: the shared holiday / work-day list. Its own back arrow is
+                        // hidden because this page already sits under the settings top bar.
+                        HolidaysScreen(viewModel = viewModel, onBack = { openSection = null })
+                    }
+                    SettingsSection.MUSIC -> {
+                        // Page 6: Music Scheduler — playlist crossfade settings
                         MusicSchedulerSettings(context = context)
+                    }
                     }
                 }
             }
+        }
+    }
+}
+
+
+// Hub: one tappable card per settings page.
+@Composable
+private fun SettingsHub(onOpen: (SettingsSection) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 18.dp, vertical = 12.dp)
+    ) {
+        Text(
+            text = "Choose a section to open its settings.",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 4.dp, bottom = 14.dp)
+        )
+
+        SettingsSection.entries.forEach { section ->
+            SettingsHubCard(section = section, onClick = { onOpen(section) })
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+
+@Composable
+private fun SettingsHubCard(section: SettingsSection, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onClick() }
+                .padding(horizontal = 16.dp, vertical = 16.dp)
+        ) {
+            ChunkyIconTile(icon = section.icon, contentDescription = null)
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = section.title,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = section.subtitle,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp)
+            )
         }
     }
 }
@@ -702,6 +795,143 @@ private fun CurveChip(
 }
 
 
+// ---- About tab: backup & restore of alarms, world clocks, music schedules and timer presets ----
+@Composable
+private fun BackupRestoreCard(
+    context: Context,
+    viewModel: `in`.sreerajp.chronotune_smart_clock.ui.ClockViewModel
+) {
+    val backupEvent by viewModel.backupEvent.collectAsStateWithLifecycle()
+    // Holds the picked import file until the user confirms Merge vs Replace.
+    var pendingImportUri by remember { mutableStateOf<android.net.Uri?>(null) }
+
+    // Show a toast for the last export/import outcome, then clear it.
+    LaunchedEffect(backupEvent) {
+        when (val e = backupEvent) {
+            is `in`.sreerajp.chronotune_smart_clock.ui.ClockViewModel.BackupEvent.Exported ->
+                Toast.makeText(context, "Backup saved (${e.bytes} bytes)", Toast.LENGTH_SHORT).show()
+            is `in`.sreerajp.chronotune_smart_clock.ui.ClockViewModel.BackupEvent.Imported ->
+                Toast.makeText(
+                    context,
+                    "Restored ${e.result.total} items (${e.result.alarms} alarms, " +
+                        "${e.result.worldClocks} clocks, ${e.result.musicSchedules} schedules, " +
+                        "${e.result.timerPresets} presets, ${e.result.specialDays} marked days)",
+                    Toast.LENGTH_LONG
+                ).show()
+            is `in`.sreerajp.chronotune_smart_clock.ui.ClockViewModel.BackupEvent.Failed ->
+                Toast.makeText(context, "Backup failed: ${e.message}", Toast.LENGTH_LONG).show()
+            null -> {}
+        }
+        if (backupEvent != null) viewModel.clearBackupEvent()
+    }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: android.net.Uri? ->
+        if (uri != null) viewModel.exportBackup(uri)
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: android.net.Uri? ->
+        if (uri != null) pendingImportUri = uri
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ChunkyIconTile(icon = Icons.Default.Backup, contentDescription = "Backup and restore")
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = "Backup & restore",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 18.sp
+                    )
+                    Text(
+                        text = "Save or load alarms, world clocks, music schedules and timer presets.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp),
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        val stamp = java.text.SimpleDateFormat("yyyyMMdd", Locale.US)
+                            .format(java.util.Date())
+                        exportLauncher.launch("chronotune-backup-$stamp.json")
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Export")
+                }
+                OutlinedButton(
+                    onClick = { importLauncher.launch(arrayOf("application/json")) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Import")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Running timers and stopwatch state are not included.",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+            )
+        }
+    }
+
+    // Merge / Replace choice after a file is picked for import.
+    pendingImportUri?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { pendingImportUri = null },
+            title = { Text("Restore backup") },
+            text = {
+                Text(
+                    "Merge adds the backup's items to what you already have. " +
+                        "Replace clears your current alarms, world clocks, music schedules and " +
+                        "timer presets first, then loads the backup."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.importBackup(uri, `in`.sreerajp.chronotune_smart_clock.data.BackupManager.ImportMode.MERGE)
+                    pendingImportUri = null
+                }) { Text("Merge") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        viewModel.importBackup(uri, `in`.sreerajp.chronotune_smart_clock.data.BackupManager.ImportMode.REPLACE)
+                        pendingImportUri = null
+                    }) { Text("Replace") }
+                    TextButton(onClick = { pendingImportUri = null }) { Text("Cancel") }
+                }
+            }
+        )
+    }
+}
+
+
 // ---- Alarm tab: default snooze length ----
 @Composable
 private fun DefaultSnoozeCard(context: Context) {
@@ -744,6 +974,156 @@ private fun DefaultSnoozeCard(context: Context) {
                         selected = snooze == m,
                         enabled = true
                     ) { AppPrefs.setDefaultSnoozeMinutes(context, m) }
+                }
+            }
+        }
+    }
+}
+
+
+// ---- Alarm tab: default auto-silence length ----
+@Composable
+private fun DefaultAutoSilenceCard(context: Context) {
+    val autoSilence by AppPrefs.defaultAutoSilenceMinutes.collectAsStateWithLifecycle()
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ChunkyIconTile(icon = Icons.Default.Timer, contentDescription = "Default auto-silence")
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = "Default auto-silence",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 18.sp
+                    )
+                    Text(
+                        text = "How long a ring sounds before stopping itself.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp),
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                AppPrefs.AUTO_SILENCE_CHOICES.forEach { m ->
+                    CurveChip(
+                        label = if (m == 0) "Never" else "$m min",
+                        selected = autoSilence == m,
+                        enabled = true
+                    ) { AppPrefs.setDefaultAutoSilenceMinutes(context, m) }
+                }
+            }
+        }
+    }
+}
+
+
+// ---- Alarm tab: default snooze limit ----
+@Composable
+private fun DefaultMaxSnoozeCard(context: Context) {
+    val maxSnooze by AppPrefs.defaultMaxSnoozeCount.collectAsStateWithLifecycle()
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ChunkyIconTile(icon = Icons.Default.Snooze, contentDescription = "Default snooze limit")
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = "Default snooze limit",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 18.sp
+                    )
+                    Text(
+                        text = "How many times an alarm may be snoozed before Snooze goes away.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp),
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf(0, 1, 2, 3, 5).forEach { n ->
+                    CurveChip(
+                        label = if (n == 0) "Unlimited" else "$n",
+                        selected = maxSnooze == n,
+                        enabled = true
+                    ) { AppPrefs.setDefaultMaxSnoozeCount(context, n) }
+                }
+            }
+        }
+    }
+}
+
+
+// ---- Alarm tab: default snooze style (same gap each time, or shrinking) ----
+@Composable
+private fun DefaultSnoozeModeCard(context: Context) {
+    val mode by AppPrefs.defaultSnoozeMode.collectAsStateWithLifecycle()
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ChunkyIconTile(icon = Icons.Default.Timelapse, contentDescription = "Default snooze style")
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = "Default snooze style",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 18.sp
+                    )
+                    Text(
+                        text = "Getting shorter makes each snooze briefer than the one before.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp),
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf(
+                    `in`.sreerajp.chronotune_smart_clock.data.Alarm.SNOOZE_MODE_FIXED to "Same each time",
+                    `in`.sreerajp.chronotune_smart_clock.data.Alarm.SNOOZE_MODE_PROGRESSIVE to "Getting shorter"
+                ).forEach { (key, label) ->
+                    CurveChip(
+                        label = label,
+                        selected = mode == key,
+                        enabled = true
+                    ) { AppPrefs.setDefaultSnoozeMode(context, key) }
                 }
             }
         }
@@ -1179,6 +1559,171 @@ private fun WeekStartCard(context: Context) {
     }
 }
 
+
+/**
+ * Picks the language the microphone listens in, and warns when Malayalam speech is not
+ * actually installed on the phone.
+ *
+ * Malayalam speech-to-text needs a voice model that many phones ship without. If we said
+ * nothing, the recogniser would quietly return English words and the user would blame the
+ * app, so the missing model is called out here with a way to go and install it.
+ */
+@Composable
+private fun VoiceLanguageCard(context: Context) {
+    val selected by AppPrefs.voiceLanguage.collectAsStateWithLifecycle()
+    var malayalamSupport by remember {
+        mutableStateOf(VoiceLanguageSupport.Support.UNKNOWN)
+    }
+    var showMalayalamNotice by remember { mutableStateOf(false) }
+
+    // Re-ask every time Settings is opened: the user may have just installed the model.
+    LaunchedEffect(Unit) {
+        VoiceLanguageSupport.refresh()
+        VoiceLanguageSupport.check(context, "ml") { malayalamSupport = it }
+    }
+
+    val options = listOf(
+        VoiceLanguage.AUTO to stringResource(R.string.voice_language_auto),
+        VoiceLanguage.ENGLISH to stringResource(R.string.voice_language_english),
+        VoiceLanguage.MALAYALAM to stringResource(R.string.voice_language_malayalam)
+    )
+
+    fun openVoiceSettings() {
+        if (!VoiceLanguageSupport.openVoiceInputSettings(context)) {
+            Toast.makeText(
+                context, R.string.voice_ml_settings_unavailable, Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ChunkyIconTile(icon = Icons.Default.Mic, contentDescription = "Voice commands")
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = stringResource(R.string.voice_language_title),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 18.sp
+                    )
+                    Text(
+                        text = "The language the microphone listens in.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp),
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                options.forEach { (language, label) ->
+                    CurveChip(
+                        label = label,
+                        selected = selected == language,
+                        enabled = true
+                    ) {
+                        AppPrefs.setVoiceLanguage(context, language)
+                        // Tell the user once, the first time they choose Malayalam on a
+                        // phone that cannot (or may not) understand it.
+                        if (language == VoiceLanguage.MALAYALAM &&
+                            malayalamSupport != VoiceLanguageSupport.Support.SUPPORTED &&
+                            !AppPrefs.wasMalayalamVoiceNoticeShown(context)
+                        ) {
+                            showMalayalamNotice = true
+                            AppPrefs.markMalayalamVoiceNoticeShown(context)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            when (malayalamSupport) {
+                VoiceLanguageSupport.Support.NOT_SUPPORTED -> {
+                    // Stated as fact: the recogniser answered and Malayalam was not listed.
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { openVoiceSettings() }
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                text = stringResource(R.string.voice_ml_missing_title),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Text(
+                                text = stringResource(R.string.voice_ml_missing_body),
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                            Text(
+                                text = stringResource(R.string.voice_ml_open_settings),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
+                        }
+                    }
+                }
+
+                else -> {
+                    // Supported, or we could not find out — a plain reminder either way.
+                    Text(
+                        text = stringResource(R.string.voice_ml_hint),
+                        fontSize = 11.5.sp,
+                        lineHeight = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+
+    if (showMalayalamNotice) {
+        AlertDialog(
+            onDismissRequest = { showMalayalamNotice = false },
+            title = { Text(stringResource(R.string.voice_ml_missing_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        if (malayalamSupport == VoiceLanguageSupport.Support.NOT_SUPPORTED)
+                            R.string.voice_ml_missing_body
+                        else R.string.voice_ml_maybe_missing_body
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    openVoiceSettings()
+                    showMalayalamNotice = false
+                }) { Text(stringResource(R.string.voice_ml_open_settings)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMalayalamNotice = false }) {
+                    Text(stringResource(R.string.voice_ok))
+                }
+            }
+        )
+    }
+}
 
 @Composable
 fun InfoCard(
