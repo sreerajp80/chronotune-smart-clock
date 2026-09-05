@@ -58,16 +58,51 @@ class AlarmService : Service() {
         val maxSnoozeCount = intent?.getIntExtra(EXTRA_MAX_SNOOZE_COUNT, 0) ?: 0
         val snoozeMode = intent?.getStringExtra(EXTRA_SNOOZE_MODE) ?: "FIXED"
         val snoozeCount = intent?.getIntExtra(EXTRA_SNOOZE_COUNT, 0) ?: 0
+        val baseId = intent?.getIntExtra(EXTRA_BASE_ID, id) ?: id
 
         Log.d(TAG, "Starting alarm service: id=$id type=$type")
 
         val alarm = ActiveAlarmState.ActiveAlarm(
             id, type, label, tone, volume, durationMin, uri, snoozeMin,
             challenge, challengeDifficulty, challengeCount, autoSilenceMin,
-            maxSnoozeCount, snoozeMode, snoozeCount
+            maxSnoozeCount, snoozeMode, snoozeCount, baseId
         )
+
+        // Something is already ringing. Queue this one instead of taking over: the service
+        // used to keep a single current alarm, so a second alarm firing in the same minute
+        // silently replaced the first — its audio stopped and its notification was orphaned,
+        // which to the user looked exactly like an alarm that never went off. The queued ring
+        // starts as soon as the active one is dismissed or snoozed.
+        if (currentAlarmId != -1 && currentAlarmId != id) {
+            if (waitingRings.none { it.id == id }) {
+                waitingRings.add(alarm)
+                Log.d(TAG, "Alarm $id queued behind $currentAlarmId")
+                postWaitingNotification(this, alarm)
+                `in`.sreerajp.chronotune_smart_clock.data.AlarmEventLog.record(
+                    this,
+                    `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent(
+                        alarmId = alarm.baseId,
+                        type = alarm.type,
+                        label = alarm.label,
+                        event = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.QUEUED,
+                        detail = "Waiting for alarm $currentAlarmId to finish"
+                    )
+                )
+            }
+            return START_NOT_STICKY
+        }
+
+        startRinging(alarm)
+        return START_NOT_STICKY
+    }
+
+    /** Takes over as the active ring: notification, audio, and the full-screen alarm UI. */
+    private fun startRinging(alarm: ActiveAlarmState.ActiveAlarm) {
+        val id = alarm.id
+        val autoSilenceMin = alarm.autoSilenceMinutes
         currentAlarmId = id
         currentAlarm = alarm
+        ringStartedAt = System.currentTimeMillis()
 
         val fsi = buildFullScreenPendingIntent(this, alarm)
         val notification = buildNotification(this, alarm, fsi)
@@ -92,6 +127,20 @@ class AlarmService : Service() {
         if (autoSilenceMin > 0) {
             val runnable = Runnable {
                 Log.d(TAG, "Auto-silencing alarm id=$id after $autoSilenceMin min")
+                // Recorded before the teardown, so the history can tell an alarm that gave up
+                // on its own from one the user actually turned off.
+                `in`.sreerajp.chronotune_smart_clock.data.AlarmEventLog.record(
+                    this,
+                    `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent(
+                        alarmId = alarm.baseId,
+                        type = alarm.type,
+                        label = alarm.label,
+                        event = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.AUTO_SILENCED,
+                        ringDurationMs = ringDurationMs(),
+                        dismissSource = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.SOURCE_AUTO_SILENCE,
+                        detail = "Stopped by itself after $autoSilenceMin min"
+                    )
+                )
                 stopAlarmAndSelf()
             }
             autoSilenceRunnable = runnable
@@ -126,8 +175,6 @@ class AlarmService : Service() {
         } finally {
             if (wakeLock.isHeld) wakeLock.release()
         }
-
-        return START_NOT_STICKY
     }
 
     private fun demoteNotification() {
@@ -167,6 +214,20 @@ class AlarmService : Service() {
         }
         currentAlarmId = -1
         currentAlarm = null
+
+        // Another alarm fired while this one was ringing and has been waiting its turn. Give
+        // it the floor now rather than stopping the service, so it is not lost.
+        val next = if (waitingRings.isNotEmpty()) waitingRings.removeAt(0) else null
+        if (next != null) {
+            Log.d(TAG, "Starting queued alarm ${next.id}")
+            try {
+                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.cancel(waitingNotificationId(next.id))
+            } catch (_: Exception) { /* ignore */ }
+            startRinging(next)
+            return
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
@@ -181,6 +242,17 @@ class AlarmService : Service() {
         // make sure the audio engine is shut down so we don't leave dangling playback.
         cancelAutoSilence()
         ActiveAlarmState.dismiss(this)
+        // Clear any queued rings and their waiting notes: with the service gone there is
+        // nothing left to start them, and a stale queue would confuse the next ring.
+        if (waitingRings.isNotEmpty()) {
+            try {
+                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                waitingRings.forEach { nm.cancel(waitingNotificationId(it.id)) }
+            } catch (_: Exception) { /* ignore */ }
+            waitingRings.clear()
+        }
+        currentAlarmId = -1
+        currentAlarm = null
         super.onDestroy()
     }
 
@@ -207,13 +279,92 @@ class AlarmService : Service() {
         const val EXTRA_MAX_SNOOZE_COUNT = "MAX_SNOOZE_COUNT"
         const val EXTRA_SNOOZE_MODE = "SNOOZE_MODE"
         const val EXTRA_SNOOZE_COUNT = "SNOOZE_COUNT"
+        const val EXTRA_BASE_ID = "BASE_ID"
 
         private var currentAlarmId: Int = -1
         private var currentAlarm: ActiveAlarmState.ActiveAlarm? = null
 
+        /**
+         * When the ring currently sounding started. Deliberately not cleared when the ring
+         * stops: dismiss and snooze both ask for the ring to stop and *then* record what
+         * happened, so the value has to survive that gap. It is simply overwritten by the
+         * next ring.
+         */
+        private var ringStartedAt: Long = 0L
+
+        /**
+         * How long the last ring had been sounding. This is the number that separates "I woke
+         * up and turned it off" from a dismiss two seconds in, half asleep.
+         */
+        fun ringDurationMs(): Long =
+            if (ringStartedAt > 0L) (System.currentTimeMillis() - ringStartedAt).coerceAtLeast(0L)
+            else 0L
+
+        /** The ring sounding right now, or null when nothing is. */
+        fun currentRing(): ActiveAlarmState.ActiveAlarm? = currentAlarm
+
+        /**
+         * Rings that arrived while another alarm was already sounding, oldest first. Only one
+         * alarm can own the audio and the full-screen screen at a time, so the rest wait here
+         * and are started in turn as each active ring is dismissed or snoozed.
+         */
+        private val waitingRings = mutableListOf<ActiveAlarmState.ActiveAlarm>()
+
+        /** Notification id for the "waiting its turn" note, kept clear of every ring id. */
+        private fun waitingNotificationId(ringId: Int): Int =
+            ringId + `in`.sreerajp.chronotune_smart_clock.data.AlarmIds.DISMISS_ACTION_OFFSET
+
+        /**
+         * The full-screen PendingIntent for a ring. Exposed so [AlarmReceiver] can still put
+         * the ringing screen up when the OS refuses to start this service at all.
+         */
+        fun fullScreenIntentFor(
+            context: Context,
+            alarm: ActiveAlarmState.ActiveAlarm
+        ): PendingIntent = buildFullScreenPendingIntent(context, alarm)
+
+        /**
+         * A quiet notification telling the user a second alarm is waiting behind the one that
+         * is currently sounding. Without it a queued alarm would be invisible until its turn.
+         */
+        private fun postWaitingNotification(
+            context: Context,
+            alarm: ActiveAlarmState.ActiveAlarm
+        ) {
+            try {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val channel = NotificationChannel(
+                        CHANNEL_ID_ACTIVE,
+                        "Alarm Active (Silent)",
+                        NotificationManager.IMPORTANCE_LOW
+                    ).apply {
+                        setSound(null, null)
+                        enableVibration(false)
+                        lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                    }
+                    nm.createNotificationChannel(channel)
+                }
+                val note = NotificationCompat.Builder(context, CHANNEL_ID_ACTIVE)
+                    .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+                    .setContentTitle("Alarm waiting")
+                    .setContentText("${alarm.label} will ring after the current alarm")
+                    .setPriority(NotificationCompat.PRIORITY_LOW)
+                    .setCategory(NotificationCompat.CATEGORY_ALARM)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setOnlyAlertOnce(true)
+                    .setAutoCancel(true)
+                    .build()
+                nm.notify(waitingNotificationId(alarm.id), note)
+            } catch (e: Exception) {
+                Log.e(TAG, "Could not post waiting notification: ${e.message}")
+            }
+        }
+
         fun startIntent(context: Context, alarm: ActiveAlarmState.ActiveAlarm): Intent =
             Intent(context, AlarmService::class.java).apply {
                 putExtra(EXTRA_ID, alarm.id)
+                putExtra(EXTRA_BASE_ID, alarm.baseId)
                 putExtra(EXTRA_TYPE, alarm.type)
                 putExtra(EXTRA_LABEL, alarm.label)
                 putExtra(EXTRA_TONE, alarm.tone)
@@ -300,6 +451,9 @@ class AlarmService : Service() {
             val snoozeIntent = Intent(context, AlarmSnoozeReceiver::class.java).apply {
                 putExtra("NOTIFICATION_ID", alarm.id)
                 putExtra("ID", alarm.id)
+                // The alarm row behind this ring, so the re-ring is armed in the right slot
+                // even when the current ring is itself a snooze.
+                putExtra("BASE_ID", alarm.baseId)
                 putExtra("LABEL", alarm.label)
                 putExtra("TONE", alarm.tone)
                 putExtra("URI", alarm.uri ?: "")
@@ -317,7 +471,7 @@ class AlarmService : Service() {
             }
             val snoozePending = PendingIntent.getBroadcast(
                 context,
-                alarm.id + 100000,
+                `in`.sreerajp.chronotune_smart_clock.data.AlarmIds.snoozeAction(alarm.id),
                 snoozeIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
@@ -362,7 +516,7 @@ class AlarmService : Service() {
                 }
                 val addMinPending = PendingIntent.getBroadcast(
                     context,
-                    alarm.id + 300000,
+                    `in`.sreerajp.chronotune_smart_clock.data.AlarmIds.addMinuteAction(alarm.id),
                     addMinIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )

@@ -3,11 +3,13 @@ package `in`.sreerajp.chronotune_smart_clock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material3.*
@@ -36,28 +38,46 @@ object DismissChallengeType {
  * Full-screen wake-up challenge shown over the ringing overlay. Runs [count] rounds of the
  * chosen [challengeType]; every correct answer advances one round. On the last correct answer
  * it calls [onSolved]; [onCancel] returns to the ringing screen (the alarm keeps ringing).
+ *
+ * [onSolved] reports how many answers were given in total (wrong ones included) and how long
+ * the challenge took. Those two numbers are what let the history tell a challenge solved
+ * first-try in four seconds — a half-asleep dismiss — from one that took six attempts.
  */
 @Composable
 fun DismissChallengePanel(
     challengeType: String,
     difficulty: String,
     count: Int,
-    onSolved: () -> Unit,
+    onSolved: (attempts: Int, elapsedMs: Long) -> Unit,
     onCancel: () -> Unit
 ) {
     val total = count.coerceIn(1, 10)
     var solved by remember { mutableIntStateOf(0) }
+    // Wrong answers so far, and when the panel opened. Kept across rounds, so the numbers
+    // describe the whole challenge rather than the last round of it.
+    var wrongAnswers by remember { mutableIntStateOf(0) }
+    val openedAt = remember { System.currentTimeMillis() }
+
+    fun finish() {
+        // Every correct round plus every wrong answer = all the answers the user gave.
+        onSolved(total + wrongAnswers, System.currentTimeMillis() - openedAt)
+    }
 
     // Advance one round; finish when all rounds are done.
     fun roundPassed() {
         val next = solved + 1
-        if (next >= total) onSolved() else solved = next
+        if (next >= total) finish() else solved = next
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .pointerInput(Unit) {
+                // Consume all taps landing outside inputs
+                detectTapGestures { }
+            }
             .background(Color.Black.copy(alpha = 0.97f))
+            .systemBarsPadding()
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -109,10 +129,22 @@ fun DismissChallengePanel(
         // The active challenge. `key(solved)` forces a fresh problem for each round.
         key(challengeType, difficulty, solved) {
             when (challengeType) {
-                DismissChallengeType.MATH -> MathChallenge(difficulty, onCorrect = { roundPassed() })
-                DismissChallengeType.PHRASE -> PhraseChallenge(difficulty, onCorrect = { roundPassed() })
-                DismissChallengeType.MEMORY -> MemoryChallenge(difficulty, onCorrect = { roundPassed() })
-                else -> onSolved() // Unknown type: don't trap the user.
+                DismissChallengeType.MATH -> MathChallenge(
+                    difficulty,
+                    onCorrect = { roundPassed() },
+                    onWrong = { wrongAnswers++ }
+                )
+                DismissChallengeType.PHRASE -> PhraseChallenge(
+                    difficulty,
+                    onCorrect = { roundPassed() },
+                    onWrong = { wrongAnswers++ }
+                )
+                DismissChallengeType.MEMORY -> MemoryChallenge(
+                    difficulty,
+                    onCorrect = { roundPassed() },
+                    onWrong = { wrongAnswers++ }
+                )
+                else -> finish() // Unknown type: don't trap the user.
             }
         }
 
@@ -171,7 +203,11 @@ private fun generateMathProblem(difficulty: String): MathProblem {
 }
 
 @Composable
-private fun MathChallenge(difficulty: String, onCorrect: () -> Unit) {
+private fun MathChallenge(
+    difficulty: String,
+    onCorrect: () -> Unit,
+    onWrong: () -> Unit = {}
+) {
     val problem = remember { generateMathProblem(difficulty) }
     var entry by remember { mutableStateOf("") }
     var wrong by remember { mutableStateOf(false) }
@@ -223,7 +259,7 @@ private fun MathChallenge(difficulty: String, onCorrect: () -> Unit) {
             onSubmit = {
                 val value = entry.toIntOrNull()
                 if (value != null && value == problem.answer) onCorrect()
-                else { wrong = true; entry = "" }
+                else { wrong = true; onWrong(); entry = "" }
             }
         )
     }
@@ -306,7 +342,11 @@ private val PHRASES = listOf(
 )
 
 @Composable
-private fun PhraseChallenge(difficulty: String, onCorrect: () -> Unit) {
+private fun PhraseChallenge(
+    difficulty: String,
+    onCorrect: () -> Unit,
+    onWrong: () -> Unit = {}
+) {
     val target = remember {
         if (difficulty == "EASY") EASY_WORDS.random() else PHRASES.random()
     }
@@ -362,7 +402,8 @@ private fun PhraseChallenge(difficulty: String, onCorrect: () -> Unit) {
         Spacer(modifier = Modifier.height(18.dp))
         Button(
             onClick = {
-                if (normalize(entry) == normalize(target)) onCorrect() else wrong = true
+                if (normalize(entry) == normalize(target)) onCorrect()
+                else { wrong = true; onWrong() }
             },
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
             shape = RoundedCornerShape(14.dp),
@@ -378,7 +419,11 @@ private fun PhraseChallenge(difficulty: String, onCorrect: () -> Unit) {
 // ============================================================================
 
 @Composable
-private fun MemoryChallenge(difficulty: String, onCorrect: () -> Unit) {
+private fun MemoryChallenge(
+    difficulty: String,
+    onCorrect: () -> Unit,
+    onWrong: () -> Unit = {}
+) {
     val n = when (difficulty) {
         "HARD" -> 9
         "MEDIUM" -> 6
@@ -423,6 +468,7 @@ private fun MemoryChallenge(difficulty: String, onCorrect: () -> Unit) {
                                 } else {
                                     // Wrong tile — restart this round.
                                     wrong = true
+                                    onWrong()
                                     next = 1
                                 }
                             },

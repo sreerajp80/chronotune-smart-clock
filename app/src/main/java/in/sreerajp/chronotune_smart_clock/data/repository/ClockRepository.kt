@@ -12,6 +12,8 @@ import `in`.sreerajp.chronotune_smart_clock.data.TimerPreset
 import `in`.sreerajp.chronotune_smart_clock.data.TimerPresetDao
 import `in`.sreerajp.chronotune_smart_clock.data.SpecialDay
 import `in`.sreerajp.chronotune_smart_clock.data.SpecialDayDao
+import `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent
+import `in`.sreerajp.chronotune_smart_clock.data.AlarmEventDao
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 
@@ -23,7 +25,10 @@ class ClockRepository(
     private val timerPresetDao: TimerPresetDao,
     // Optional: the background services that only ring alarms and timers never touch the
     // holiday list, so they can build a repository without it.
-    private val specialDayDao: SpecialDayDao? = null
+    private val specialDayDao: SpecialDayDao? = null,
+    // Optional for the same reason. The ring path writes events through AlarmEventLog, which
+    // goes straight to the DAO, so a service-side repository does not need this either.
+    private val alarmEventDao: AlarmEventDao? = null
 ) {
     // Alarms
     val allAlarms: Flow<List<Alarm>> = alarmDao.getAllAlarms()
@@ -116,6 +121,33 @@ class ClockRepository(
 
     suspend fun deleteAllSpecialDays() {
         specialDayDao?.deleteAll()
+    }
+
+    // Alarm event history — what each alarm actually did.
+    fun recentAlarmEvents(limit: Int): Flow<List<AlarmEvent>> =
+        alarmEventDao?.getRecent(limit) ?: flowOf(emptyList())
+
+    suspend fun getRecentAlarmEventsOnce(limit: Int): List<AlarmEvent> =
+        alarmEventDao?.getRecentOnce(limit) ?: emptyList()
+
+    suspend fun insertAlarmEvent(event: AlarmEvent) {
+        alarmEventDao?.insert(event)
+    }
+
+    /** Arm records whose trigger time has passed, for the missed-alarm check. */
+    suspend fun getDueArmRecords(after: Long, before: Long): List<AlarmEvent> =
+        alarmEventDao?.getDueArmRecords(after, before) ?: emptyList()
+
+    suspend fun getAlarmEventsForAlarmSince(alarmId: Int, since: Long): List<AlarmEvent> =
+        alarmEventDao?.getForAlarmSince(alarmId, since) ?: emptyList()
+
+    /** Drops log rows older than [cutoff]. Retention housekeeping, run at start-up. */
+    suspend fun pruneAlarmEventsBefore(cutoff: Long) {
+        alarmEventDao?.deleteBefore(cutoff)
+    }
+
+    suspend fun deleteAllAlarmEvents() {
+        alarmEventDao?.deleteAll()
     }
 
     /** Replaces one source's days inside [days] — the calendar import's clean-slate step. */

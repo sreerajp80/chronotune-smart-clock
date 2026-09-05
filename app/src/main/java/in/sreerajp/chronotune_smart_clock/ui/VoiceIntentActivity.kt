@@ -1,7 +1,6 @@
 package `in`.sreerajp.chronotune_smart_clock.ui
 
 import android.app.Activity
-import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.provider.AlarmClock
@@ -195,11 +194,4 @@ class VoiceIntentActivity : Activity() {
         }.trim().ifBlank { "0 min" }
     }
 
-    companion object {
-        /** Convenience for other parts of the app that want to hand over a spoken sentence. */
-        fun intentFor(context: Context, spoken: String): Intent =
-            Intent(context, VoiceIntentActivity::class.java)
-                .setAction(AlarmClock.ACTION_SET_ALARM)
-                .putExtra(AlarmClock.EXTRA_MESSAGE, spoken)
-    }
 }

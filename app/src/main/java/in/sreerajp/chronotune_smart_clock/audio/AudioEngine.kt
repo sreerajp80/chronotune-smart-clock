@@ -29,6 +29,11 @@ class AudioEngine(context: Context) {
     }
     // The system alarm-stream level we override while ringing, so we can put it back
     // afterwards. -1 means "not currently overridden".
+    //
+    // Mirrored into AppPrefs rather than kept only in memory: if the process is killed while
+    // an alarm is sounding, restoreAlarmStream() never runs, and without the persisted copy
+    // the phone would be left stuck at maximum alarm volume for good. [recoverAlarmStream]
+    // puts it back at the next start-up.
     private var savedAlarmStreamVolume: Int = -1
 
     // Make the in-app volume setting the *only* thing that determines loudness. All playback
@@ -39,6 +44,8 @@ class AudioEngine(context: Context) {
         try {
             if (savedAlarmStreamVolume == -1) {
                 savedAlarmStreamVolume = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+                `in`.sreerajp.chronotune_smart_clock.AppPrefs
+                    .setSavedAlarmStreamVolume(context, savedAlarmStreamVolume)
             }
             val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
             audioManager.setStreamVolume(AudioManager.STREAM_ALARM, max, 0)
@@ -56,6 +63,30 @@ class AudioEngine(context: Context) {
             Log.e("AudioEngine", "Failed to restore alarm stream volume: ${e.message}")
         } finally {
             savedAlarmStreamVolume = -1
+            try {
+                `in`.sreerajp.chronotune_smart_clock.AppPrefs.clearSavedAlarmStreamVolume(context)
+            } catch (_: Exception) { /* ignore */ }
+        }
+    }
+
+    /**
+     * Puts back an alarm-stream level left behind by a ring whose process died before it could
+     * restore it. Safe to call at any time: it does nothing unless a level is actually pending,
+     * and it clears the pending value either way.
+     */
+    fun recoverAlarmStream() {
+        try {
+            val pending = `in`.sreerajp.chronotune_smart_clock.AppPrefs
+                .getSavedAlarmStreamVolume(context)
+            if (pending < 0) return
+            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, pending, 0)
+            Log.d("AudioEngine", "Recovered alarm stream volume left at max by a killed ring")
+        } catch (e: Exception) {
+            Log.e("AudioEngine", "Failed to recover alarm stream volume: ${e.message}")
+        } finally {
+            try {
+                `in`.sreerajp.chronotune_smart_clock.AppPrefs.clearSavedAlarmStreamVolume(context)
+            } catch (_: Exception) { /* ignore */ }
         }
     }
 

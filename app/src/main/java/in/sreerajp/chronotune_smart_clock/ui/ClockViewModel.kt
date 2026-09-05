@@ -22,7 +22,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
-import java.util.Calendar
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -57,12 +56,27 @@ class ClockViewModel(
     // Alarm Scheduler helper
     private val scheduler = AlarmScheduler(context)
 
+    /**
+     * Everything the alarms have done lately, newest first. This is the whole log — arms,
+     * rings, snoozes, dismisses and the system's own re-arms — and the history screen decides
+     * what to show from it.
+     */
+    val alarmEvents: StateFlow<List<`in`.sreerajp.chronotune_smart_clock.data.AlarmEvent>> =
+        repository.recentAlarmEvents(AppPrefs.EVENT_PAGE_SIZE)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // The newest alarm found to have not rung, once per miss. Null when there is nothing to
+    // report or the user has already dismissed the banner for it.
+    private val _missedAlarm =
+        MutableStateFlow<`in`.sreerajp.chronotune_smart_clock.data.AlarmEvent?>(null)
+    val missedAlarm: StateFlow<`in`.sreerajp.chronotune_smart_clock.data.AlarmEvent?> =
+        _missedAlarm.asStateFlow()
+
     // Current time trigger ticker
     private val _currentTime = MutableStateFlow(System.currentTimeMillis())
     val currentTime = _currentTime.asStateFlow()
 
     private var tickerJob: Job? = null
-    private var lastTriggeredMinute = -1
 
     // Full searchable zone catalog, built once from the IANA timezone database
     // shipped with Android (TimeZone.getAvailableIDs() — API 1, unlike java.time's
@@ -147,6 +161,153 @@ class ClockViewModel(
         startClocksTicker()
         startChronoTicker()
         startSpecialDaySync()
+        repairAlarmsOnStart()
+        checkForMissedAlarms()
+    }
+
+    /**
+     * Works out which alarms were armed for a time that has passed but never rang, records each
+     * one, and surfaces the newest for the banner on the alarms screen.
+     *
+     * This is the whole point of writing an arm record for every alarm: without it, an alarm
+     * that never went off leaves no trace at all and looks exactly like a quiet morning.
+     *
+     * Also prunes log rows past the retention window while it is here.
+     */
+    private fun checkForMissedAlarms() {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val now = System.currentTimeMillis()
+                    repository.pruneAlarmEventsBefore(now - AppPrefs.EVENT_RETENTION_MS)
+
+                    val armed = repository.getDueArmRecords(
+                        after = now - AppPrefs.MISSED_LOOKBACK_MS,
+                        // Only judge firings that are properly past due, so an alarm ringing
+                        // right now is never mistaken for one that failed.
+                        before = now - `in`.sreerajp.chronotune_smart_clock.data.MISSED_TOLERANCE_MS
+                    )
+                    if (armed.isEmpty()) return@withContext
+
+                    val others = armed.map { it.alarmId }.distinct().flatMap { alarmId ->
+                        repository.getAlarmEventsForAlarmSince(
+                            alarmId, now - AppPrefs.MISSED_LOOKBACK_MS
+                        )
+                    }
+                    val missed = `in`.sreerajp.chronotune_smart_clock.data.findMissedArmRecords(
+                        armed, others
+                    )
+
+                    missed.forEach { armRecord ->
+                        `in`.sreerajp.chronotune_smart_clock.data.AlarmEventLog.recordNow(
+                            context,
+                            armRecord.copy(
+                                id = 0,
+                                event = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.MISSED,
+                                actualAt = 0L,   // stamped with "now", i.e. when it was noticed
+                                detail = "No ring was recorded for this alarm"
+                            )
+                        )
+                    }
+
+                    val newest = missed.maxByOrNull { it.scheduledAt }
+                    if (newest != null &&
+                        newest.scheduledAt > AppPrefs.getMissedBannerSeenAt(context)
+                    ) {
+                        _missedAlarm.value = newest
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("ClockViewModel", "Missed-alarm check failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Hides the missed-alarm banner and remembers not to show that one again. */
+    fun dismissMissedAlarmBanner() {
+        val current = _missedAlarm.value
+        _missedAlarm.value = null
+        if (current != null) {
+            AppPrefs.setMissedBannerSeenAt(context, current.scheduledAt)
+        }
+    }
+
+    /** Empties the alarm history. */
+    fun clearAlarmHistory() {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { repository.deleteAllAlarmEvents() }
+                _missedAlarm.value = null
+            } catch (e: Exception) {
+                android.util.Log.e("ClockViewModel", "Could not clear history: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Writes the history to [uri] as plain text, so a bad night can be shared or kept.
+     * Reports through the existing backup event channel, which the settings UI already shows.
+     */
+    fun exportAlarmHistory(uri: Uri) {
+        viewModelScope.launch {
+            try {
+                val rows = withContext(Dispatchers.IO) {
+                    repository.getRecentAlarmEventsOnce(AppPrefs.EVENT_PAGE_SIZE)
+                }
+                val text = BackupManager.formatAlarmEventLog(rows)
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        out.write(text.toByteArray())
+                    } ?: throw IllegalStateException("Could not open the chosen file")
+                }
+                _backupEvent.value = BackupEvent.Exported(text.toByteArray().size)
+            } catch (e: Exception) {
+                _backupEvent.value = BackupEvent.Failed(e.message ?: "Export failed")
+            }
+        }
+    }
+
+    /**
+     * Re-arms alarms the system has silently thrown away, and starts the watchdog that keeps
+     * doing so while the app is closed.
+     *
+     * Android drops every pending alarm an app owns when the app is force-stopped, killed by an
+     * OEM battery cleaner, or hibernated for being unused — with no notice of any kind. Before
+     * this, opening the app did nothing to repair that: the alarm stayed lost until the user
+     * rebooted or edited it by hand, which is the most likely reason an alarm "sometimes does
+     * not ring".
+     *
+     * Only alarms whose PendingIntent has actually gone are rebuilt, so a normal launch does
+     * almost no work.
+     */
+    private fun repairAlarmsOnStart() {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val repaired = `in`.sreerajp.chronotune_smart_clock.ui.WatchdogReceiver
+                        .repairMissingAlarms(context, scheduler)
+                    if (repaired > 0) {
+                        android.util.Log.d("ClockViewModel", "Start-up re-armed $repaired alarm(s)")
+                    }
+                    scheduler.scheduleWatchdog()
+                }
+            } catch (e: Exception) {
+                // Never let start-up housekeeping break the app opening.
+                android.util.Log.e("ClockViewModel", "Alarm repair on start failed: ${e.message}")
+            }
+
+            // Put back an alarm-stream level left at maximum by a ring whose process was
+            // killed before it could restore it. Skipped while something is actually ringing,
+            // so this can never quieten a live alarm.
+            try {
+                if (ActiveAlarmState.activeAlarm.value == null) {
+                    withContext(Dispatchers.IO) {
+                        `in`.sreerajp.chronotune_smart_clock.audio.AudioEngine(context)
+                            .recoverAlarmStream()
+                    }
+                }
+            } catch (_: Exception) { /* housekeeping only */ }
+        }
     }
 
     /**
@@ -182,76 +343,19 @@ class ClockViewModel(
         }
     }
 
+    // Drives the clock readout only. Alarms and music schedules are rung solely by
+    // AlarmManager -> AlarmReceiver -> AlarmService. There used to be a second, in-app
+    // evaluator here that rang anything matching the current hour + minute, but it had no
+    // memory of what had already rung: dismissing an alarm and then opening the app inside
+    // the same clock minute made it ring all over again, with default settings instead of
+    // the alarm's own. The scheduler path fires whether the app is open, backgrounded or
+    // killed, so nothing is lost by leaving the ringing entirely to it.
     private fun startClocksTicker() {
         tickerJob?.cancel()
         tickerJob = viewModelScope.launch {
             while (isActive) {
-                val now = System.currentTimeMillis()
-                _currentTime.value = now
-                
-                // Safety real-time trigger evaluator for active sessions
-                checkInAppTriggers(now)
-                
+                _currentTime.value = System.currentTimeMillis()
                 delay(100) // Ticks clocks every 100ms
-            }
-        }
-    }
-
-    private fun checkInAppTriggers(now: Long) {
-        val cal = Calendar.getInstance()
-        val hour = cal.get(Calendar.HOUR_OF_DAY)
-        val minute = cal.get(Calendar.MINUTE)
-        
-        // Ensure trigger fires once per minute boundary
-        if (minute == lastTriggeredMinute) return
-
-        val dayOfWeek = cal.get(Calendar.DAY_OF_WEEK) // 1=Sunday, 2=Monday...
-        val mappedDay = when (dayOfWeek) {
-            Calendar.SUNDAY -> 7
-            else -> dayOfWeek - 1
-        }
-
-        // Evaluate Alarms
-        alarms.value.forEach { alarm ->
-            if (alarm.isEnabled && alarm.hour == hour && alarm.minute == minute &&
-                !alarm.isPausedNow() && !alarm.isSkippedToday()) {
-                val repeatDays = alarm.getRepeatDaysList()
-                if (repeatDays.isEmpty() || repeatDays.contains(mappedDay)) {
-                    val active = ActiveAlarmState.ActiveAlarm(
-                        id = alarm.id,
-                        type = "ALARM",
-                        label = alarm.label.ifBlank { "Alarm Ringing" },
-                        tone = alarm.customToneName,
-                        volume = alarm.volume,
-                        uri = alarm.customToneUri
-                    )
-                    if (ActiveAlarmState.activeAlarm.value?.id != alarm.id) {
-                        ActiveAlarmState.triggerAlarm(context, active)
-                        lastTriggeredMinute = minute
-                    }
-                }
-            }
-        }
-
-        // Evaluate Music Schedules
-        musicSchedules.value.forEach { schedule ->
-            if (schedule.isEnabled && schedule.hour == hour && schedule.minute == minute) {
-                val repeatDays = schedule.getRepeatDaysList()
-                if (repeatDays.isEmpty() || repeatDays.contains(mappedDay)) {
-                    val active = ActiveAlarmState.ActiveAlarm(
-                        id = schedule.id,
-                        type = "MUSIC",
-                        label = schedule.label.ifBlank { "Scheduled Music" },
-                        tone = schedule.musicTrackName,
-                        volume = schedule.volume,
-                        durationMin = schedule.durationMinutes,
-                        uri = schedule.customFileUri
-                    )
-                    if (ActiveAlarmState.activeAlarm.value?.id != schedule.id) {
-                        ActiveAlarmState.triggerAlarm(context, active)
-                        lastTriggeredMinute = minute
-                    }
-                }
             }
         }
     }
@@ -387,10 +491,6 @@ class ClockViewModel(
 
     private val _importState = MutableStateFlow<ImportState>(ImportState.Idle)
     val importState: StateFlow<ImportState> = _importState.asStateFlow()
-
-    fun clearImportState() {
-        _importState.value = ImportState.Idle
-    }
 
     /** The calendars on the device. Empty when READ_CALENDAR has not been granted. */
     suspend fun availableCalendars(): List<`in`.sreerajp.chronotune_smart_clock.data.CalendarHolidayImporter.CalendarInfo> =

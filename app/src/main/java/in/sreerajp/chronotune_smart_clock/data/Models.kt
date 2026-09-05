@@ -1,6 +1,7 @@
 package `in`.sreerajp.chronotune_smart_clock.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.util.Calendar
 import java.util.Locale
@@ -127,9 +128,6 @@ data class Alarm(
     fun isSkippedOnEpochDay(epochDay: Long): Boolean =
         skipNextEpochDay > 0L && epochDay == skipNextEpochDay
 
-    /** True when today's occurrence is the one being skipped. */
-    fun isSkippedToday(): Boolean = isSkippedOnEpochDay(todayEpochDay())
-
     /**
      * True while a skip is still pending (today or a future day). A skip day that has already
      * passed is treated as inactive — the UI shows nothing and the stored value is inert.
@@ -161,6 +159,68 @@ data class Alarm(
 
         fun todayEpochDay(): Long = localCalendarToEpochDay(Calendar.getInstance())
     }
+}
+
+/**
+ * Every AlarmManager request code / notification id the app uses, in one place.
+ *
+ * These offsets have to stay apart from each other: two ids that collide share a
+ * [android.app.PendingIntent] and a notification id, so arming one silently cancels the other.
+ *
+ * The snooze space in particular used to be computed by adding 50000 to whatever id was
+ * ringing, which meant a snoozed snooze grew: id+50000, id+100000, id+150000... and the fourth
+ * snooze of alarm N landed on N+200000 — exactly a timer's ring id. Now every snooze is
+ * derived from the *original* alarm id ([snoozeRing]), so a chain of any length reuses one slot.
+ */
+object AlarmIds {
+    /** Alarms use their row id as-is; everything else is offset away from that space. */
+    const val MUSIC_OFFSET = 10_000
+
+    /** Kept at its historical value so pending intents armed by older builds still match. */
+    const val TIMER_RING_OFFSET = TimerItem.RING_ID_OFFSET   // 200_000
+
+    const val SNOOZE_RING_OFFSET = 500_000
+    const val SNOOZE_ACTION_OFFSET = 600_000
+    const val ADD_MINUTE_ACTION_OFFSET = 700_000
+    const val DISMISS_ACTION_OFFSET = 800_000
+
+    /**
+     * Fixed request code for the periodic re-arm watchdog (see AlarmScheduler.scheduleWatchdog).
+     *
+     * Kept above every derived id: the largest one an id can reach is the dismiss action of a
+     * timer ring, id + 200_000 + 800_000, so anything past ~1.01 million is safely out of reach.
+     */
+    const val WATCHDOG_REQUEST_CODE = 1_500_000
+
+    /**
+     * Offsets used by the pre-fix snooze chain. Nothing arms these any more, but a device
+     * upgrading from an older build can still have one pending, so they are cancelled once on
+     * package replace.
+     */
+    val LEGACY_SNOOZE_OFFSETS = listOf(50_000, 100_000, 150_000)
+
+    fun musicRing(scheduleId: Int): Int = scheduleId + MUSIC_OFFSET
+    fun timerRing(timerId: Int): Int = timerId + TIMER_RING_OFFSET
+    fun snoozeRing(baseAlarmId: Int): Int = baseAlarmId + SNOOZE_RING_OFFSET
+    fun snoozeAction(baseAlarmId: Int): Int = baseAlarmId + SNOOZE_ACTION_OFFSET
+    fun addMinuteAction(ringId: Int): Int = ringId + ADD_MINUTE_ACTION_OFFSET
+    fun dismissAction(ringId: Int): Int = ringId + DISMISS_ACTION_OFFSET
+
+    /**
+     * The original alarm id behind a ringing id. A snooze ring reports the base alarm it came
+     * from, so a whole morning — first ring, every snooze, the final dismiss — groups under one
+     * id in the event history.
+     */
+    fun baseAlarmId(ringId: Int): Int =
+        if (ringId >= SNOOZE_RING_OFFSET && ringId < SNOOZE_ACTION_OFFSET) {
+            ringId - SNOOZE_RING_OFFSET
+        } else {
+            ringId
+        }
+
+    /** True when [ringId] is a snoozed re-ring rather than a scheduled firing. */
+    fun isSnoozeRing(ringId: Int): Boolean =
+        ringId >= SNOOZE_RING_OFFSET && ringId < SNOOZE_ACTION_OFFSET
 }
 
 /**
@@ -200,8 +260,118 @@ data class TimerItem(
         const val STATE_FINISHED = "FINISHED"
 
         /** Offset applied to a timer id when used as an AlarmManager request code / ring ID,
-         *  keeping it distinct from alarm (id), music (id+10000) and snooze (id+50000/+100000). */
+         *  keeping it distinct from alarm (id), music and snooze ids. See [AlarmIds], which
+         *  owns the full id map and re-exports this value. */
         const val RING_ID_OFFSET = 200000
+    }
+}
+
+/**
+ * One thing that happened to an alarm: it was armed, it rang, it was suppressed, it was
+ * snoozed, it was dismissed, or it never rang at all.
+ *
+ * The app kept no record of any of this. A missed alarm and a quiet morning looked identical,
+ * and an alarm dismissed half-asleep at 05:58 left no trace either. Every row here answers one
+ * of those two questions, and together they show which of the ways a ring can be lost is
+ * actually happening on this phone.
+ */
+@Entity(
+    tableName = "alarm_events",
+    indices = [Index("alarmId"), Index("actualAt")]
+)
+data class AlarmEvent(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+
+    // The alarm row this belongs to. Always the ORIGINAL alarm id, never a snooze or timer-ring
+    // offset id, so a whole morning — first ring, every snooze, the final dismiss — groups
+    // under one alarm.
+    val alarmId: Int,
+    val type: String = TYPE_ALARM,     // ALARM | MUSIC | TIMER
+    val label: String = "",
+
+    val event: String,
+    // When this was meant to happen, and when it really did. The gap between them is the delay
+    // the OS added, which is what exposes Doze deferral.
+    val scheduledAt: Long = 0L,
+    val actualAt: Long = 0L,
+
+    // --- ring details ---
+    // How long the alarm had been sounding when this happened. 0 for non-ring events.
+    val ringDurationMs: Long = 0L,
+
+    // --- dismiss details ---
+    val dismissSource: String = SOURCE_NONE,
+    val challengeType: String = "NONE",     // NONE | MATH | PHRASE | MEMORY
+    val challengeDifficulty: String = "",
+    val challengeRounds: Int = 0,           // rounds the alarm required
+    val challengeAttempts: Int = 0,         // answers given, wrong ones included
+    val challengeSolvedMs: Long = 0L,       // opening the challenge to solving it
+
+    // --- snooze details ---
+    val snoozeIndex: Int = 0,               // 1 = the first snooze of this ring
+    val snoozeGapMinutes: Int = 0,          // the gap this snooze actually used
+    val snoozeMode: String = "",            // FIXED | PROGRESSIVE
+    val snoozeLimit: Int = 0,               // 0 = unlimited
+    val nextRingAt: Long = 0L,              // when the snoozed re-ring is due
+
+    // --- device state, for working out why a ring was late or missing ---
+    val screenOn: Boolean = false,
+    val deviceLocked: Boolean = false,
+    val dozeIdle: Boolean = false,
+    val exactAllowed: Boolean = true,
+
+    // Free text: an exception message, which suppression rule applied, and so on.
+    val detail: String = ""
+) {
+    /** True for the events that represent an alarm actually making a noise. */
+    fun isRing(): Boolean = event == FIRED
+
+    companion object {
+        const val TYPE_ALARM = "ALARM"
+        const val TYPE_MUSIC = "MUSIC"
+        const val TYPE_TIMER = "TIMER"
+
+        // --- events ---
+        /** Armed with AlarmManager. [scheduledAt] carries the trigger time it was armed for. */
+        const val SCHEDULED = "SCHEDULED"
+        /** The alarm was switched off or deleted, so its pending firing was cancelled. */
+        const val CANCELLED = "CANCELLED"
+        /** The receiver decided this ring goes ahead. */
+        const val FIRED = "FIRED"
+        const val SUPPRESSED_PAUSE = "SUPPRESSED_PAUSE"
+        const val SUPPRESSED_SKIP = "SUPPRESSED_SKIP"
+        const val SUPPRESSED_HOLIDAY = "SUPPRESSED_HOLIDAY"
+        /** The ring could not be started at all (foreground service refused, and so on). */
+        const val RING_FAILED = "RING_FAILED"
+        /** A second alarm fired while another was ringing and had to wait its turn. */
+        const val QUEUED = "QUEUED"
+        const val SNOOZED = "SNOOZED"
+        const val DISMISSED = "DISMISSED"
+        /** The auto-silence timer stopped the ring; nobody dismissed it. */
+        const val AUTO_SILENCED = "AUTO_SILENCED"
+        /** Worked out afterwards: it was armed for a past time and never rang. */
+        const val MISSED = "MISSED"
+        const val RESCHEDULED_BOOT = "RESCHEDULED_BOOT"
+        const val RESCHEDULED_WATCHDOG = "RESCHEDULED_WATCHDOG"
+
+        // --- how a dismiss happened ---
+        const val SOURCE_NONE = "NONE"
+        /** Dismissed on the full-screen alarm screen. */
+        const val SOURCE_FULL_SCREEN = "FULL_SCREEN"
+        /** Dismissed from the notification shade, without opening the alarm screen. */
+        const val SOURCE_NOTIFICATION = "NOTIFICATION"
+        const val SOURCE_AUTO_SILENCE = "AUTO_SILENCE"
+
+        /** Events that mean the ring definitely happened, for the missed-alarm check. */
+        val RANG_OR_HANDLED = setOf(
+            FIRED, SUPPRESSED_PAUSE, SUPPRESSED_SKIP, SUPPRESSED_HOLIDAY,
+            RING_FAILED, QUEUED, CANCELLED, MISSED
+        )
+
+        /** Quieter events: real, always listed, but not what the user is usually looking for. */
+        val SYSTEM_EVENTS = setOf(
+            SCHEDULED, CANCELLED, RESCHEDULED_BOOT, RESCHEDULED_WATCHDOG
+        )
     }
 }
 

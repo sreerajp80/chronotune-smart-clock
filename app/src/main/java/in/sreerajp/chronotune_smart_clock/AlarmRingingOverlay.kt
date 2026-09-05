@@ -1,7 +1,9 @@
 package `in`.sreerajp.chronotune_smart_clock
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -27,10 +29,17 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
+/**
+ * The ringing screen.
+ *
+ * [onDismiss] reports how the dismiss was earned: how many answers the challenge took and how
+ * long it took to solve, both 0 when the alarm has no challenge. Those numbers go into the
+ * alarm history, where they are what distinguishes a real wake-up from a half-asleep tap.
+ */
 @Composable
 fun AlarmRingingOverlay(
     alarm: ActiveAlarmState.ActiveAlarm,
-    onDismiss: () -> Unit,
+    onDismiss: (challengeAttempts: Int, challengeMs: Long) -> Unit,
     onSnooze: () -> Unit
 ) {
     // When a dismiss challenge is set, tapping DISMISS opens the challenge panel instead of
@@ -38,6 +47,15 @@ fun AlarmRingingOverlay(
     var showChallenge by remember { mutableStateOf(false) }
     val hasChallenge = alarm.type == "ALARM" &&
         alarm.dismissChallenge != DismissChallengeType.NONE
+
+    // Intercept back navigation: if a challenge is showing, back returns to the ringing screen.
+    // Otherwise, deliberately do nothing so the alarm screen does not close or hide on back
+    // presses or gestures. Only tapping Dismiss or completing Snooze should dismiss.
+    BackHandler(enabled = true) {
+        if (showChallenge && hasChallenge) {
+            showChallenge = false
+        }
+    }
 
     val infiniteTransition = rememberInfiniteTransition(label = "Pulse animation")
     val pulseRatio by infiniteTransition.animateFloat(
@@ -50,11 +68,20 @@ fun AlarmRingingOverlay(
         label = "Pulse indicator"
     )
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                // Consume all taps landing outside buttons so they do not fall through
+                // or cause unexpected window dismissal
+                detectTapGestures { }
+            }
+    ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.9f))
+            .systemBarsPadding()
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
@@ -142,7 +169,7 @@ fun AlarmRingingOverlay(
                     verticalAlignment = Alignment.Bottom
                 ) {
                     Button3D(
-                        onClick = { if (hasChallenge) showChallenge = true else onDismiss() },
+                        onClick = { if (hasChallenge) showChallenge = true else onDismiss(0, 0L) },
                         modifier = Modifier
                             .weight(1f)
                             .height(60.dp)
@@ -178,7 +205,7 @@ fun AlarmRingingOverlay(
                     )
                 }
                 Button3D(
-                    onClick = { if (hasChallenge) showChallenge = true else onDismiss() },
+                    onClick = { if (hasChallenge) showChallenge = true else onDismiss(0, 0L) },
                     modifier = Modifier
                         .fillMaxWidth(0.8f)
                         .height(60.dp)
@@ -206,7 +233,7 @@ fun AlarmRingingOverlay(
                 challengeType = alarm.dismissChallenge,
                 difficulty = alarm.challengeDifficulty,
                 count = alarm.challengeCount,
-                onSolved = onDismiss,
+                onSolved = { attempts, elapsedMs -> onDismiss(attempts, elapsedMs) },
                 onCancel = { showChallenge = false }
             )
         }

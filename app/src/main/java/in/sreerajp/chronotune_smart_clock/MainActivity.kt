@@ -56,6 +56,10 @@ class MainActivity : ComponentActivity() {
 
         AppPrefs.init(applicationContext)
 
+        // Watch for the screen being unlocked so alarms can be checked then. USER_PRESENT
+        // cannot be declared in the manifest, so it has to be registered from running code.
+        `in`.sreerajp.chronotune_smart_clock.ui.BootReceiver.registerUnlockWatch(applicationContext)
+
         // After a fresh install or force-stop, Android suppresses APPWIDGET_UPDATE
         // broadcasts, so the launcher shows "Tap to open this app so your widget
         // can refresh." Opening MainActivity clears the stopped flag — push a

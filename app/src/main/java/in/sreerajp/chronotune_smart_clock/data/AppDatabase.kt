@@ -10,13 +10,14 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 @Database(
     entities = [
         Alarm::class, WorldClock::class, MusicSchedule::class, TimerItem::class,
-        TimerPreset::class, SpecialDay::class
+        TimerPreset::class, SpecialDay::class, AlarmEvent::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun alarmDao(): AlarmDao
+    abstract fun alarmEventDao(): AlarmEventDao
     abstract fun worldClockDao(): WorldClockDao
     abstract fun musicScheduleDao(): MusicScheduleDao
     abstract fun timerDao(): TimerDao
@@ -136,6 +137,21 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // v9 -> v10: the alarm event log. Purely additive — a new table and its two indexes,
+        // with no existing table touched, so an upgrade cannot lose anything.
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Copied verbatim from the CREATE TABLE Room generates for AlarmEvent, so an
+                // upgraded database is byte-for-byte what a fresh install produces. Room checks
+                // this on open and refuses to start if the two differ.
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `alarm_events` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `alarmId` INTEGER NOT NULL, `type` TEXT NOT NULL, `label` TEXT NOT NULL, `event` TEXT NOT NULL, `scheduledAt` INTEGER NOT NULL, `actualAt` INTEGER NOT NULL, `ringDurationMs` INTEGER NOT NULL, `dismissSource` TEXT NOT NULL, `challengeType` TEXT NOT NULL, `challengeDifficulty` TEXT NOT NULL, `challengeRounds` INTEGER NOT NULL, `challengeAttempts` INTEGER NOT NULL, `challengeSolvedMs` INTEGER NOT NULL, `snoozeIndex` INTEGER NOT NULL, `snoozeGapMinutes` INTEGER NOT NULL, `snoozeMode` TEXT NOT NULL, `snoozeLimit` INTEGER NOT NULL, `nextRingAt` INTEGER NOT NULL, `screenOn` INTEGER NOT NULL, `deviceLocked` INTEGER NOT NULL, `dozeIdle` INTEGER NOT NULL, `exactAllowed` INTEGER NOT NULL, `detail` TEXT NOT NULL)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_alarm_events_alarmId` ON `alarm_events` (`alarmId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_alarm_events_actualAt` ON `alarm_events` (`actualAt`)")
+            }
+        }
+
         // Shared starter presets used by the migration and the destructive-fallback callback.
         private fun seedPresets(db: SupportSQLiteDatabase) {
             fun insert(label: String, minutes: Long, order: Int) {
@@ -159,7 +175,8 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
-                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
+                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                    MIGRATION_9_10
                 )
                 .addCallback(object : Callback() {
                     // When the DB is created fresh (first install or after a destructive

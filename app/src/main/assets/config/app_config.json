@@ -1,0 +1,12 @@
+{
+  "appName": "ChronoTune Smart Clock",
+  "description": "A feature-rich Android clock app featuring multiple location clocks, custom tone alarms, a stopwatch, a timer, and an automated music scheduler.",
+  "version": "2.10.13",
+  "build": "3",
+  "details": {
+    "Architect": "Sreeraj P",
+    "Author": "Gemini 3.8 Flash and Claude Opus 4.8",
+    "License": "All libraries used are open source.",
+    "IDE": "Visual Studio/Antigravity/Android Studio"
+  }
+}

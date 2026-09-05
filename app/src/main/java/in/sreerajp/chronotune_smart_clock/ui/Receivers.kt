@@ -40,7 +40,11 @@ object ActiveAlarmState {
         // How many times this alarm has already been snoozed. Carried through the snooze
         // intent chain rather than stored, so it resets by itself when the alarm next fires
         // from its own schedule.
-        val snoozeCount: Int = 0
+        val snoozeCount: Int = 0,
+        // The alarm row this ring belongs to. Same as [id] for a scheduled firing; for a
+        // snoozed re-ring [id] lives in the snooze id space while this stays the original
+        // alarm, so a whole morning can be traced back to one alarm.
+        val baseId: Int = id
     ) {
         /** True while the user may still snooze this ring. */
         fun canSnooze(): Boolean =
@@ -135,7 +139,9 @@ object ActiveAlarmState {
             autoSilenceMinutes = current.autoSilenceMinutes,
             maxSnoozeCount = current.maxSnoozeCount,
             snoozeMode = current.snoozeMode,
-            snoozeCount = current.snoozeCount
+            snoozeCount = current.snoozeCount,
+            baseAlarmId = current.baseId,
+            source = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.SOURCE_FULL_SCREEN
         )
     }
 
@@ -144,6 +150,11 @@ object ActiveAlarmState {
     //
     // [snoozeCount] is how many snoozes already happened; this call is number snoozeCount + 1.
     // Returns false and does nothing when the alarm has run out of snoozes.
+    //
+    // [id] is the id that is ringing right now (which is itself a snooze id from the second
+    // snooze onwards); [baseAlarmId] is the alarm row it all started from. The re-ring is
+    // always armed at AlarmIds.snoozeRing(baseAlarmId), so a chain of any length reuses one
+    // slot instead of climbing 50000 at a time into the timer id space.
     fun scheduleSnooze(
         context: Context,
         id: Int,
@@ -158,7 +169,12 @@ object ActiveAlarmState {
         autoSilenceMinutes: Int = 0,
         maxSnoozeCount: Int = 0,
         snoozeMode: String = "FIXED",
-        snoozeCount: Int = 0
+        snoozeCount: Int = 0,
+        baseAlarmId: Int = `in`.sreerajp.chronotune_smart_clock.data.AlarmIds.baseAlarmId(id),
+        // Where the snooze was taken: the ringing screen or the notification shade. Recorded
+        // in the history, because reaching for the shade is a different act from tapping the
+        // big button on the alarm screen.
+        source: String = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.SOURCE_NONE
     ): Boolean {
         if (!`in`.sreerajp.chronotune_smart_clock.data.canSnoozeAgain(maxSnoozeCount, snoozeCount)) {
             Log.d("ActiveAlarmState", "Snooze limit ($maxSnoozeCount) reached for $id — not re-arming")
@@ -174,7 +190,7 @@ object ActiveAlarmState {
         cal.add(java.util.Calendar.MINUTE, gapMinutes)
 
         val tempAlarm = `in`.sreerajp.chronotune_smart_clock.data.Alarm(
-            id = id + 50000, // Safe offset for temporary snooze alarm
+            id = `in`.sreerajp.chronotune_smart_clock.data.AlarmIds.snoozeRing(baseAlarmId),
             hour = cal.get(java.util.Calendar.HOUR_OF_DAY),
             minute = cal.get(java.util.Calendar.MINUTE),
             label = "$label (Snoozed)",
@@ -196,8 +212,70 @@ object ActiveAlarmState {
             maxSnoozeCount = maxSnoozeCount,
             snoozeMode = snoozeMode
         )
-        scheduler.scheduleAlarm(tempAlarm, snoozeCount = snoozeCount + 1)
+        scheduler.scheduleAlarm(
+            tempAlarm,
+            snoozeCount = snoozeCount + 1,
+            baseAlarmId = baseAlarmId
+        )
+
+        // The whole snooze, written down: which one in the chain it was, the gap it actually
+        // used, the allowance it is spending, when it will ring again, and how long the alarm
+        // had been sounding before the user reached for it.
+        `in`.sreerajp.chronotune_smart_clock.data.AlarmEventLog.record(
+            context,
+            `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent(
+                alarmId = baseAlarmId,
+                type = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.TYPE_ALARM,
+                label = label,
+                event = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.SNOOZED,
+                ringDurationMs = AlarmService.ringDurationMs(),
+                dismissSource = source,
+                challengeType = dismissChallenge,
+                challengeDifficulty = challengeDifficulty,
+                challengeRounds = challengeCount,
+                snoozeIndex = snoozeCount + 1,
+                snoozeGapMinutes = gapMinutes,
+                snoozeMode = snoozeMode,
+                snoozeLimit = maxSnoozeCount,
+                nextRingAt = cal.timeInMillis
+            )
+        )
         return true
+    }
+
+    /**
+     * Records that a ring was turned off from a screen the user was looking at.
+     *
+     * [challengeAttempts] and [challengeMs] describe the wake-up challenge, and are 0 when the
+     * alarm has none. Together with the ring duration they are what answers "did I dismiss this
+     * in my sleep?" — a challenge solved first-try in four seconds at 05:58 reads very
+     * differently from one that took six attempts.
+     */
+    fun recordDismiss(
+        context: Context,
+        ring: ActiveAlarm,
+        source: String,
+        challengeAttempts: Int = 0,
+        challengeMs: Long = 0L
+    ) {
+        `in`.sreerajp.chronotune_smart_clock.data.AlarmEventLog.record(
+            context,
+            `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent(
+                alarmId = ring.baseId,
+                type = ring.type,
+                label = ring.label,
+                event = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.DISMISSED,
+                ringDurationMs = AlarmService.ringDurationMs(),
+                dismissSource = source,
+                challengeType = ring.dismissChallenge,
+                challengeDifficulty = ring.challengeDifficulty,
+                challengeRounds = ring.challengeCount,
+                challengeAttempts = challengeAttempts,
+                challengeSolvedMs = challengeMs,
+                // How many snoozes this morning had already used before it finally stopped.
+                snoozeIndex = ring.snoozeCount
+            )
+        )
     }
 
     private fun cancelNotification(context: Context, id: Int) {
@@ -246,6 +324,10 @@ class AlarmReceiver : BroadcastReceiver() {
     // goAsync() may only be called while onReceive is still on the stack.
     private fun handleFiring(context: Context, intent: Intent, canGoAsync: Boolean) {
         val id = intent.getIntExtra("ID", -1)
+        val baseId = intent.getIntExtra(
+            "BASE_ID",
+            `in`.sreerajp.chronotune_smart_clock.data.AlarmIds.baseAlarmId(id)
+        )
         val type = intent.getStringExtra("TYPE") ?: "ALARM"
         val label = intent.getStringExtra("LABEL") ?: "Alarm Ringing"
         val tone = intent.getStringExtra("TONE") ?: "Morning Breeze"
@@ -267,6 +349,9 @@ class AlarmReceiver : BroadcastReceiver() {
         val snoozeMode = intent.getStringExtra("SNOOZE_MODE") ?: "FIXED"
         val snoozeCount = intent.getIntExtra("SNOOZE_COUNT", 0)
         val startEpochDay = intent.getLongExtra("START_EPOCH_DAY", 0L)
+        // The time this firing was armed for. Comparing it with now is what shows how late the
+        // OS actually delivered the alarm.
+        val scheduledAt = intent.getLongExtra("SCHEDULED_AT", 0L)
 
         Log.d("AlarmReceiver", "Alarm occurred! Type: $type, Label: $label, ID: $id")
 
@@ -283,6 +368,11 @@ class AlarmReceiver : BroadcastReceiver() {
         // still lands the next occurrence after the window).
         if (type == "ALARM" && isPausedNow(pauseStart, pauseEnd)) {
             Log.d("AlarmReceiver", "Alarm $id is within its pause window — suppressing ring")
+            logEvent(
+                context, baseId, type, label, scheduledAt,
+                `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.SUPPRESSED_PAUSE,
+                "Inside the alarm's pause window"
+            )
             return
         }
 
@@ -291,6 +381,11 @@ class AlarmReceiver : BroadcastReceiver() {
         if (type == "ALARM" && skipEpochDay > 0L &&
             skipEpochDay == `in`.sreerajp.chronotune_smart_clock.data.Alarm.todayEpochDay()) {
             Log.d("AlarmReceiver", "Alarm $id is on its skipped day — suppressing ring")
+            logEvent(
+                context, baseId, type, label, scheduledAt,
+                `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.SUPPRESSED_SKIP,
+                "Skip next was set for today"
+            )
             return
         }
 
@@ -299,6 +394,11 @@ class AlarmReceiver : BroadcastReceiver() {
         // Suppress it here (the re-arm above has already found the next allowed day).
         if (type == "ALARM" && isHolidayToday(holidayMode)) {
             Log.d("AlarmReceiver", "Alarm $id falls on a holiday — suppressing ring")
+            logEvent(
+                context, baseId, type, label, scheduledAt,
+                `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.SUPPRESSED_HOLIDAY,
+                "Today is marked as a holiday"
+            )
             return
         }
 
@@ -310,9 +410,41 @@ class AlarmReceiver : BroadcastReceiver() {
         val alarm = ActiveAlarmState.ActiveAlarm(
             id, type, label, tone, volume, durationMin, uri, snoozeMin,
             challenge, challengeDifficulty, challengeCount, autoSilenceMin,
-            maxSnoozeCount, snoozeMode, snoozeCount
+            maxSnoozeCount, snoozeMode, snoozeCount, baseId
         )
-        ContextCompat.startForegroundService(context, AlarmService.startIntent(context, alarm))
+        // Recorded before the hand-off, so the row exists even if starting the ring throws.
+        logEvent(
+            context, baseId, type, label, scheduledAt,
+            `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.FIRED
+        )
+        try {
+            ContextCompat.startForegroundService(context, AlarmService.startIntent(context, alarm))
+        } catch (e: Exception) {
+            // Android refuses a foreground-service start when the broadcast that woke us
+            // carried no temporary allow-list (ForegroundServiceStartNotAllowedException).
+            // Rather than lose the ring completely, send the full-screen intent directly so
+            // the user still gets a ringing screen with Dismiss and Snooze on it.
+            Log.e("AlarmReceiver", "Foreground service refused for $id, ringing in-process: ${e.message}")
+            try {
+                // Start the audio in this process and put the ringing screen up ourselves.
+                // Without the service the process is no longer protected from being reaped
+                // mid-ring, but a ring that might be cut short is far better than silence.
+                ActiveAlarmState.triggerAlarm(context.applicationContext, alarm)
+                AlarmService.fullScreenIntentFor(context, alarm).send()
+                logEvent(
+                    context, baseId, type, label, scheduledAt,
+                    `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.RING_FAILED,
+                    "Foreground service refused; rang in-process instead: ${e.message}"
+                )
+            } catch (e2: Exception) {
+                Log.e("AlarmReceiver", "In-process ring fallback also failed for $id: ${e2.message}")
+                logEvent(
+                    context, baseId, type, label, scheduledAt,
+                    `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.RING_FAILED,
+                    "Could not ring at all: ${e2.message}"
+                )
+            }
+        }
 
         // A one-shot pinned to a date has now done its single job, so switch the row off —
         // otherwise it would sit in the list looking armed weeks after its date. A one-shot
@@ -364,6 +496,29 @@ class AlarmReceiver : BroadcastReceiver() {
                 }
             }
         }
+    }
+
+    /** Records one event about this firing. Best-effort: see AlarmEventLog. */
+    private fun logEvent(
+        context: Context,
+        alarmId: Int,
+        type: String,
+        label: String,
+        scheduledAt: Long,
+        event: String,
+        detail: String = ""
+    ) {
+        `in`.sreerajp.chronotune_smart_clock.data.AlarmEventLog.record(
+            context,
+            `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent(
+                alarmId = alarmId,
+                type = type,
+                label = label,
+                event = event,
+                scheduledAt = scheduledAt,
+                detail = detail
+            )
+        )
     }
 
     private fun isPausedNow(pauseStartMillis: Long, pauseEndMillis: Long): Boolean {
@@ -472,11 +627,75 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_LOCKED_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED,
             Intent.ACTION_TIME_CHANGED,
-            Intent.ACTION_TIMEZONE_CHANGED -> rescheduleAll(context)
+            Intent.ACTION_TIMEZONE_CHANGED ->
+                rescheduleAll(
+                    context,
+                    dropLegacySnoozes = action == Intent.ACTION_MY_PACKAGE_REPLACED,
+                    reason = action ?: "boot"
+                )
+
+            // Registered at runtime by the app (USER_PRESENT cannot be declared in the
+            // manifest since Android 8). This is the safety net for the case where the phone
+            // was rebooted overnight: the database is encrypted until the first unlock, so
+            // BOOT_COMPLETED could not restore anything, and without this the morning alarm
+            // would simply never have been armed.
+            Intent.ACTION_USER_PRESENT -> repairOnly(context)
         }
     }
 
-    private fun rescheduleAll(context: Context) {
+    companion object {
+        @Volatile
+        private var unlockWatchRegistered = false
+
+        /**
+         * Starts listening for the screen being unlocked, so alarms can be checked then.
+         *
+         * `ACTION_USER_PRESENT` cannot be declared in the manifest since Android 8, so it has
+         * to be registered from running code. That also means it only helps while the process
+         * is alive — the real protection against a force-stop is [WatchdogReceiver] plus the
+         * check the app runs at start-up. Called once from MainActivity.
+         */
+        fun registerUnlockWatch(context: Context) {
+            if (unlockWatchRegistered) return
+            unlockWatchRegistered = true
+            try {
+                val filter = android.content.IntentFilter(Intent.ACTION_USER_PRESENT)
+                ContextCompat.registerReceiver(
+                    context.applicationContext,
+                    BootReceiver(),
+                    filter,
+                    ContextCompat.RECEIVER_NOT_EXPORTED
+                )
+            } catch (e: Exception) {
+                Log.e("BootReceiver", "Could not watch for unlock: ${e.message}")
+            }
+        }
+    }
+
+    /** Re-arms only the alarms whose pending broadcast has gone missing. */
+    private fun repairOnly(context: Context) {
+        val pending = goAsync()
+        val appContext = context.applicationContext
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val scheduler = AlarmScheduler(appContext)
+                val repaired = WatchdogReceiver.repairMissingAlarms(appContext, scheduler)
+                if (repaired > 0) {
+                    Log.d("BootReceiver", "Unlock check re-armed $repaired alarm(s)")
+                }
+            } catch (e: Exception) {
+                Log.e("BootReceiver", "Unlock check failed: ${e.message}")
+            } finally {
+                pending.finish()
+            }
+        }
+    }
+
+    private fun rescheduleAll(
+        context: Context,
+        dropLegacySnoozes: Boolean = false,
+        reason: String = "boot"
+    ) {
         val pending = goAsync()
         val appContext = context.applicationContext
         CoroutineScope(Dispatchers.IO).launch {
@@ -493,6 +712,10 @@ class BootReceiver : BroadcastReceiver() {
                 `in`.sreerajp.chronotune_smart_clock.data.SpecialDayRegistry.refresh(appContext)
 
                 repo.allAlarms.first().forEach { alarm ->
+                    // An upgrade from a pre-fix build can carry a snooze left pending in the
+                    // old, growing id space. Nothing arms those any more, so clear them once
+                    // rather than let a stray re-ring go off days later.
+                    if (dropLegacySnoozes) scheduler.cancelLegacySnoozes(alarm.id)
                     if (alarm.isEnabled) scheduler.scheduleAlarm(alarm)
                 }
                 repo.allMusicSchedules.first().forEach { schedule ->
@@ -501,7 +724,18 @@ class BootReceiver : BroadcastReceiver() {
                 // Re-arm running timers: elapsedRealtime reset on reboot, so recompute the
                 // display base from the persisted RTC target and re-schedule the ring.
                 TimerEngine.rescheduleAllAfterBoot(repo, appContext)
+                // AlarmManager alarms do not survive a reboot, and that includes the watchdog
+                // itself — arm it again so the repair chain keeps running.
+                scheduler.scheduleWatchdog()
                 Log.d("BootReceiver", "Rescheduled alarms, music schedules and timers")
+                `in`.sreerajp.chronotune_smart_clock.data.AlarmEventLog.record(
+                    appContext,
+                    `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent(
+                        alarmId = 0,
+                        event = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.RESCHEDULED_BOOT,
+                        detail = reason
+                    )
+                )
             } catch (e: Exception) {
                 Log.e("BootReceiver", "Failed to reschedule: ${e.message}")
             } finally {
@@ -520,6 +754,23 @@ class BootReceiver : BroadcastReceiver() {
 
 class AlarmDismissReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        // Recorded before the teardown, while the ring details are still readable. A dismiss
+        // taken here never opened the alarm screen — the user swiped down and tapped Dismiss.
+        AlarmService.currentRing()?.let { ring ->
+            `in`.sreerajp.chronotune_smart_clock.data.AlarmEventLog.record(
+                context,
+                `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent(
+                    alarmId = ring.baseId,
+                    type = ring.type,
+                    label = ring.label,
+                    event = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.DISMISSED,
+                    ringDurationMs = AlarmService.ringDurationMs(),
+                    dismissSource = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.SOURCE_NOTIFICATION,
+                    snoozeIndex = ring.snoozeCount
+                )
+            )
+        }
+
         // Stop the foreground service — it owns the audio engine and the ongoing
         // notification, so this tears down everything atomically. Going through the
         // service avoids the race where the receiver runs in a cold process and
@@ -576,6 +827,10 @@ class AlarmSnoozeReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val notifId = intent.getIntExtra("NOTIFICATION_ID", -1)
         val id = intent.getIntExtra("ID", notifId)
+        val baseId = intent.getIntExtra(
+            "BASE_ID",
+            `in`.sreerajp.chronotune_smart_clock.data.AlarmIds.baseAlarmId(id)
+        )
         val label = intent.getStringExtra("LABEL") ?: "Alarm"
         val tone = intent.getStringExtra("TONE") ?: "Morning Breeze"
         val uri = intent.getStringExtra("URI") ?: ""
@@ -615,7 +870,136 @@ class AlarmSnoozeReceiver : BroadcastReceiver() {
             autoSilenceMinutes = autoSilenceMin,
             maxSnoozeCount = maxSnoozeCount,
             snoozeMode = snoozeMode,
-            snoozeCount = snoozeCount
+            snoozeCount = snoozeCount,
+            baseAlarmId = baseId,
+            source = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.SOURCE_NOTIFICATION
         )
+    }
+}
+
+/**
+ * Repairs alarms the system has silently thrown away.
+ *
+ * Android drops every pending alarm an app owns when the app is force-stopped, when an OEM
+ * battery cleaner kills it, or when it is hibernated for being unused. Nothing tells the app
+ * that this happened, and before this receiver existed the alarm simply never rang again until
+ * the user rebooted or edited it.
+ *
+ * Fires roughly every few hours (see [AppPrefs.WATCHDOG_INTERVAL_MS]), re-arms itself, and
+ * rebuilds only the alarms whose PendingIntent has actually gone missing.
+ */
+class WatchdogReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val pending = goAsync()
+        val appContext = context.applicationContext
+        CoroutineScope(Dispatchers.IO).launch {
+            val scheduler = AlarmScheduler(appContext)
+            // Re-arm the next watchdog first, so a failure below can never end the chain.
+            try {
+                scheduler.scheduleWatchdog()
+            } catch (e: Exception) {
+                Log.e("WatchdogReceiver", "Could not re-arm watchdog: ${e.message}")
+            }
+            try {
+                val repaired = repairMissingAlarms(appContext, scheduler)
+                Log.d("WatchdogReceiver", "Watchdog checked alarms, re-armed $repaired")
+                if (repaired > 0) {
+                    // Only worth a row when something was actually broken: a watchdog run that
+                    // finds everything in order is not news, and would bury the log.
+                    `in`.sreerajp.chronotune_smart_clock.data.AlarmEventLog.record(
+                        appContext,
+                        `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent(
+                            alarmId = 0,
+                            event = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.RESCHEDULED_WATCHDOG,
+                            detail = "Re-armed $repaired alarm(s) the system had dropped"
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("WatchdogReceiver", "Watchdog check failed: ${e.message}")
+            } finally {
+                pending.finish()
+            }
+        }
+    }
+
+    companion object {
+        /**
+         * Re-arms every enabled alarm and music schedule whose pending broadcast has vanished,
+         * and returns how many were rebuilt.
+         *
+         * Only the missing ones are touched: re-arming everything on each check would churn
+         * every pending intent on the device for no reason.
+         */
+        suspend fun repairMissingAlarms(context: Context, scheduler: AlarmScheduler): Int {
+            val db = AppDatabase.getDatabase(context)
+            val repo = ClockRepository(
+                db.alarmDao(), db.worldClockDao(), db.musicScheduleDao(),
+                db.timerDao(), db.timerPresetDao()
+            )
+            // Holiday-aware alarms need the day list before their next date can be worked out.
+            try {
+                `in`.sreerajp.chronotune_smart_clock.data.SpecialDayRegistry.refresh(context)
+            } catch (_: Exception) { /* empty list just means "no holidays known" */ }
+
+            var repaired = 0
+            repo.getAllAlarmsOnce().forEach { alarm ->
+                if (!alarm.isEnabled) return@forEach
+                // A snoozed alarm has its own pending re-ring; leave it alone rather than
+                // arming the base alarm on top of it.
+                val snoozePending = scheduler.isArmed(
+                    `in`.sreerajp.chronotune_smart_clock.data.AlarmIds.snoozeRing(alarm.id)
+                )
+                if (!scheduler.isArmed(alarm.id) && !snoozePending) {
+                    scheduler.scheduleAlarm(alarm)
+                    repaired++
+                }
+            }
+            repo.getAllMusicSchedulesOnce().forEach { schedule ->
+                if (!schedule.isEnabled) return@forEach
+                if (!scheduler.isArmed(
+                        `in`.sreerajp.chronotune_smart_clock.data.AlarmIds.musicRing(schedule.id)
+                    )
+                ) {
+                    scheduler.scheduleMusic(schedule)
+                    repaired++
+                }
+            }
+            return repaired
+        }
+    }
+}
+
+/**
+ * Upgrades alarms to the exact "alarm clock" path once the user grants the exact-alarm
+ * permission in system settings.
+ *
+ * Without this, an alarm saved while the permission was off keeps the weaker while-idle
+ * scheduling for ever, even after the user fixes the permission from the Settings screen.
+ */
+class ExactAlarmPermissionReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        Log.d("ExactAlarmPermission", "Exact alarm permission state changed — re-arming alarms")
+        val pending = goAsync()
+        val appContext = context.applicationContext
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val db = AppDatabase.getDatabase(appContext)
+                val repo = ClockRepository(
+                    db.alarmDao(), db.worldClockDao(), db.musicScheduleDao(),
+                    db.timerDao(), db.timerPresetDao()
+                )
+                val scheduler = AlarmScheduler(appContext)
+                `in`.sreerajp.chronotune_smart_clock.data.SpecialDayRegistry.refresh(appContext)
+                // Every alarm is re-armed here, not just the missing ones: the point is to move
+                // them all onto the stronger scheduling path.
+                repo.getAllAlarmsOnce().forEach { if (it.isEnabled) scheduler.scheduleAlarm(it) }
+                repo.getAllMusicSchedulesOnce().forEach { if (it.isEnabled) scheduler.scheduleMusic(it) }
+            } catch (e: Exception) {
+                Log.e("ExactAlarmPermission", "Re-arm after permission change failed: ${e.message}")
+            } finally {
+                pending.finish()
+            }
+        }
     }
 }

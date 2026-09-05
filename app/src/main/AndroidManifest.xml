@@ -18,6 +18,10 @@
          silently dropped by the OS. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Only used to open the system "allow this app to ignore battery optimisation" dialog
+         from the Settings health check. Without that exemption, OEM battery managers kill the
+         app and Android drops every alarm it had pending. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.TURN_SCREEN_ON" />
     <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -135,6 +139,22 @@
         <receiver android:name="in.sreerajp.chronotune_smart_clock.ui.AlarmDismissReceiver" android:enabled="true" android:exported="false" />
         <receiver android:name="in.sreerajp.chronotune_smart_clock.ui.AlarmSnoozeReceiver" android:enabled="true" android:exported="false" />
         <receiver android:name="in.sreerajp.chronotune_smart_clock.ui.TimerAddMinuteReceiver" android:enabled="true" android:exported="false" />
+        <!-- Periodic check that every enabled alarm still has a live pending intent. Android
+             drops them silently on force-stop / OEM battery clean-up / app hibernation, and
+             nothing else would ever notice. -->
+        <receiver android:name="in.sreerajp.chronotune_smart_clock.ui.WatchdogReceiver" android:enabled="true" android:exported="false" />
+
+        <!-- Re-arms alarms onto the exact "alarm clock" path once the user grants the
+             exact-alarm permission in system settings (Android 12+). -->
+        <receiver
+            android:name="in.sreerajp.chronotune_smart_clock.ui.ExactAlarmPermissionReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
         <receiver
             android:name="in.sreerajp.chronotune_smart_clock.ui.BootReceiver"
             android:enabled="true"

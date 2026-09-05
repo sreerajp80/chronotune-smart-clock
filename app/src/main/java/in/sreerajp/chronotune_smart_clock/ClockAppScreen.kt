@@ -24,6 +24,9 @@ fun ClockAppScreen(
     initialTab: Int = 0
 ) {
     var selectedTab by remember { mutableIntStateOf(initialTab) }
+    // Set when settings is opened straight onto the alarm history, from the "an alarm did not
+    // ring" banner.
+    var settingsOnHistory by remember { mutableStateOf(false) }
     LaunchedEffect(initialTab) { selectedTab = initialTab }
 
     var showSettings by remember { mutableStateOf(false) }
@@ -121,7 +124,11 @@ fun ClockAppScreen(
                             viewModel = viewModel,
                             isDark = isDark,
                             onToggleTheme = onToggleTheme,
-                            onBack = { showSettings = false }
+                            onBack = {
+                                showSettings = false
+                                settingsOnHistory = false
+                            },
+                            startOnHistory = settingsOnHistory
                         )
                     } else {
                         // Main screens with their respective Settings button actions
@@ -129,7 +136,14 @@ fun ClockAppScreen(
                             0 -> WorldClockScreen(viewModel, isDark, onOpenSettings = { showSettings = true })
                             1 -> AlarmsScreen(
                                 viewModel,
-                                onOpenSettings = { showSettings = true },
+                                onOpenSettings = {
+                                    settingsOnHistory = false
+                                    showSettings = true
+                                },
+                                onOpenHistory = {
+                                    settingsOnHistory = true
+                                    showSettings = true
+                                },
                                 onNavigateTab = { selectedTab = it }
                             )
                             2 -> StopwatchScreen(viewModel, onOpenSettings = { showSettings = true })
@@ -155,7 +169,14 @@ fun ClockAppScreen(
         activeAlarm?.let { ring ->
             AlarmRingingOverlay(
                 alarm = ring,
-                onDismiss = {
+                onDismiss = { attempts, challengeMs ->
+                    ActiveAlarmState.recordDismiss(
+                        context = context,
+                        ring = ring,
+                        source = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.SOURCE_FULL_SCREEN,
+                        challengeAttempts = attempts,
+                        challengeMs = challengeMs
+                    )
                     // Stop via the service so audio + notification + foreground state are
                     // torn down together.
                     try {
@@ -186,7 +207,15 @@ fun ClockAppScreen(
                         snoozeMinutes = snoozeMinutes,
                         dismissChallenge = ring.dismissChallenge,
                         challengeDifficulty = ring.challengeDifficulty,
-                        challengeCount = ring.challengeCount
+                        challengeCount = ring.challengeCount,
+                        // Carried through so a snooze taken on this fallback screen keeps the
+                        // alarm's own auto-silence, allowance and progressive gap.
+                        autoSilenceMinutes = ring.autoSilenceMinutes,
+                        maxSnoozeCount = ring.maxSnoozeCount,
+                        snoozeMode = ring.snoozeMode,
+                        snoozeCount = ring.snoozeCount,
+                        baseAlarmId = ring.baseId,
+                        source = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.SOURCE_FULL_SCREEN
                     )
                 }
             )

@@ -28,23 +28,3 @@ val SageLight = Color(0xFF6B8E4E)
 val WarmSlate = Color(0xFF3D2817)
 val WarmGray = Color(0xFF6B5946)
 val WarmTan = Color(0xFFB59B7C)
-
-// Clock-face accents
-val ClockFaceSurfaceLight = Color(0xFFFFFCF4)
-val ClockFaceEdgeLight = Color(0xFFE8D9C0)
-val ClockFaceSurfaceDark = Color(0xFF1A1F2E)
-val ClockFaceEdgeDark = Color(0xFF0C0E14)
-val SecondHandLight = Color(0xFFC62828)
-val SecondHandDark = Color(0xFFFF1744)
-
-// 3D button shadow tints
-val ButtonShadowLight = Color(0xFF8B3818)
-val ButtonShadowDark = Color(0xFF000000)
-
-// Materials 3 defaults (fallback backward compatibility)
-val Purple80 = VermillionDark
-val PurpleGrey80 = GhostGray
-val Pink80 = GoldDark
-val Purple40 = VermillionLight
-val PurpleGrey40 = WarmGray
-val Pink40 = GoldLight

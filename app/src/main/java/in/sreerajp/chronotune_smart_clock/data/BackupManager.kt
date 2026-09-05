@@ -241,4 +241,40 @@ object BackupManager {
         volume = o.optDouble("volume", 0.8).toFloat(),
         sortOrder = o.optInt("sortOrder", 0)
     )
+
+    /**
+     * The alarm history as plain text, newest first, ready to be saved or sent to someone.
+     *
+     * Plain text rather than JSON on purpose: this file exists to be read by a person trying
+     * to work out why an alarm did not go off.
+     */
+    fun formatAlarmEventLog(events: List<AlarmEvent>): String {
+        val stamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+        return buildString {
+            appendLine("Chronotune alarm history")
+            appendLine("Exported ${stamp.format(java.util.Date())}")
+            appendLine("${events.size} event(s), newest first")
+            appendLine()
+            events.forEach { e ->
+                append(stamp.format(java.util.Date(e.actualAt)))
+                append("  ")
+                append(if (e.label.isBlank()) "Alarm ${e.alarmId}" else e.label)
+                append("  |  ")
+                appendLine(e.summaryLine())
+                if (e.scheduledAt > 0L) {
+                    appendLine("    due ${stamp.format(java.util.Date(e.scheduledAt))}")
+                }
+                if (e.nextRingAt > 0L) {
+                    appendLine("    next ring ${stamp.format(java.util.Date(e.nextRingAt))}")
+                }
+                appendLine(
+                    "    screen ${if (e.screenOn) "on" else "off"}, " +
+                        "${if (e.deviceLocked) "locked" else "unlocked"}, " +
+                        "${if (e.dozeIdle) "deep sleep" else "awake"}, " +
+                        "exact alarms ${if (e.exactAllowed) "allowed" else "not allowed"}"
+                )
+                if (e.detail.isNotBlank()) appendLine("    ${e.detail}")
+            }
+        }
+    }
 }

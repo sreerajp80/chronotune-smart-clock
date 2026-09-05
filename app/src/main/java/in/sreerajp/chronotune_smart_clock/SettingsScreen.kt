@@ -1,5 +1,6 @@
 package `in`.sreerajp.chronotune_smart_clock
 
+import android.annotation.SuppressLint
 import android.Manifest
 import android.content.Context
 import android.os.Build
@@ -60,29 +61,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.graphics.vector.ImageVector
-
-// Config and URI helpers
-data class AppConfig(val architect: String, val author: String, val version: String)
-
-
-private fun loadConfig(context: Context): AppConfig {
-    return try {
-        val inputStream: InputStream = context.assets.open("app_config.json")
-        val size = inputStream.available()
-        val buffer = ByteArray(size)
-        inputStream.read(buffer)
-        inputStream.close()
-        val jsonStr = String(buffer, Charsets.UTF_8)
-        val jsonObject = org.json.JSONObject(jsonStr)
-        AppConfig(
-            architect = jsonObject.optString("architect", "Sreeraj P"),
-            author = jsonObject.optString("author", "Gemini 3.5 Flash"),
-            version = jsonObject.optString("version", "1.5.0")
-        )
-    } catch (_: Exception) {
-        AppConfig("Sreeraj P", "Gemini 3.5 Flash", "1.5.0")
-    }
-}
+import `in`.sreerajp.chronotune_smart_clock.config.AppConfig
+import `in`.sreerajp.chronotune_smart_clock.config.ConfigService
 
 
 // The settings hub is a list of cards; each card opens one of these pages.
@@ -96,6 +76,7 @@ private enum class SettingsSection(
     PERMISSIONS("Permissions", "Notification and exact alarm access", Icons.Default.Shield),
     ALARM("Alarm", "Fade-in, snooze, auto-silence and tone", Icons.Default.Alarm),
     HOLIDAYS("Holidays & work days", "Days your alarms can skip or work through", Icons.Default.BeachAccess),
+    HISTORY("Alarm history", "What each alarm did, and any that never rang", Icons.Default.History),
     MUSIC("Music", "Crossfade and loudness for playlists", Icons.AutoMirrored.Filled.QueueMusic)
 }
 
@@ -105,18 +86,27 @@ fun SettingsScreen(
     viewModel: `in`.sreerajp.chronotune_smart_clock.ui.ClockViewModel,
     isDark: Boolean,
     onToggleTheme: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    // True when settings was opened specifically to show the alarm history — the "See why"
+    // button on the missed-alarm banner. Lands on that page instead of the hub.
+    startOnHistory: Boolean = false
 ) {
     val context = LocalContext.current
     // null means the hub (card list) is showing.
-    var openSection by remember { mutableStateOf<SettingsSection?>(null) }
+    var openSection by remember {
+        mutableStateOf<SettingsSection?>(if (startOnHistory) SettingsSection.HISTORY else null)
+    }
 
     // Dynamic permissions check states
     var hasNotifications by remember { mutableStateOf(false) }
     var hasExactAlarm by remember { mutableStateOf(false) }
+    // Whether the app is exempt from battery optimisation. Without the exemption, OEM battery
+    // managers are free to kill the app, and Android throws away every alarm it had pending —
+    // the single most common reason an alarm never rings.
+    var ignoresBatteryOptimisation by remember { mutableStateOf(true) }
     
     // Read dynamic config details
-    val appConfig = remember { loadConfig(context) }
+    val appConfig = remember { ConfigService.loadAndVerify(context) }
     
     // Launcher for critical permission notifications trigger
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -137,6 +127,13 @@ fun SettingsScreen(
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             alarmManager.canScheduleExactAlarms()
         } else {
+            true
+        }
+
+        ignoresBatteryOptimisation = try {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            pm.isIgnoringBatteryOptimizations(context.packageName)
+        } catch (_: Exception) {
             true
         }
     }
@@ -204,49 +201,67 @@ fun SettingsScreen(
                         }
                         
                         Text(
-                            text = "Chronos Clock Studio",
+                            text = appConfig.appName,
                             fontSize = 21.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
                             color = MaterialTheme.colorScheme.onBackground
                         )
                         Text(
-                            text = "A modern state-of-the-art Material 3 clock suite delivering precise alarm scheduling and automated background music playback.",
+                            text = appConfig.description,
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 24.dp)
                         )
                         
-                        // Architect configuration display card
-                        InfoCard(
-                            label = "Architect",
-                            value = appConfig.architect,
-                            icon = Icons.Default.Architecture,
-                            badgeColor = MaterialTheme.colorScheme.primary
-                        )
-                        
-                        Spacer(modifier = Modifier.height(12.dp))
-                        
-                        // Author configuration display card
-                        InfoCard(
-                            label = "Author",
-                            value = appConfig.author,
-                            icon = Icons.Default.SmartToy,
-                            badgeColor = MaterialTheme.colorScheme.secondary
-                        )
-                        
-                        Spacer(modifier = Modifier.height(12.dp))
-                        
                         // Dynamic version number display card
                         InfoCard(
-                            label = "Version Level",
-                            value = appConfig.version,
+                            label = "Version",
+                            value = "${appConfig.version} (${appConfig.build})",
                             icon = Icons.Default.CheckCircle,
                             badgeColor = MaterialTheme.colorScheme.tertiary
                         )
                         
-                        Spacer(modifier = Modifier.height(24.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Dynamic details cards from app_config.json
+                        appConfig.details.entries.forEach { (key, value) ->
+                            if (key.isNotBlank() && value.isNotBlank()) {
+                                val isEmail = key.trim().equals("email", ignoreCase = true)
+                                val icon = when (key.trim().lowercase()) {
+                                    "architect" -> Icons.Default.Architecture
+                                    "author" -> Icons.Default.SmartToy
+                                    "email" -> Icons.Default.Email
+                                    "license" -> Icons.Default.Description
+                                    "ai used" -> Icons.Default.AutoAwesome
+                                    "ide used" -> Icons.Default.Computer
+                                    else -> Icons.Default.Info
+                                }
+                                val badgeColor = when (key.trim().lowercase()) {
+                                    "architect" -> MaterialTheme.colorScheme.primary
+                                    "author" -> MaterialTheme.colorScheme.secondary
+                                    "license" -> MaterialTheme.colorScheme.outline
+                                    else -> MaterialTheme.colorScheme.primary
+                                }
+                                InfoCard(
+                                    label = key,
+                                    value = value,
+                                    icon = icon,
+                                    badgeColor = badgeColor,
+                                    onClick = if (isEmail) {
+                                        {
+                                            try {
+                                                context.startActivity(Intent(Intent.ACTION_SENDTO, "mailto:$value".toUri()))
+                                            } catch (_: Exception) {}
+                                        }
+                                    } else null
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(12.dp))
 
                         BackupRestoreCard(context = context, viewModel = viewModel)
 
@@ -418,8 +433,52 @@ fun SettingsScreen(
                             }
                         )
                         
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Permission 3: battery optimisation exemption. This is the one that
+                        // decides whether the app survives long enough to ring at all.
+                        PermissionItem(
+                            title = "Unrestricted Battery Usage",
+                            description = "Stops the phone from closing the app in the background. When the app is closed this way, Android throws away every alarm it had waiting.",
+                            type = "Special Context System Permission",
+                            isExplicit = true,
+                            status = if (ignoresBatteryOptimisation) "Approved (Active)" else "Configure Settings",
+                            isOk = ignoresBatteryOptimisation,
+                            onClick = {
+                                try {
+                                    @SuppressLint("BatteryLife")
+                                    val intent = Intent(
+                                        android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                        "package:${context.packageName}".toUri()
+                                    )
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {
+                                    // Some builds hide the direct dialog; the list screen is
+                                    // the next best thing.
+                                    try {
+                                        context.startActivity(
+                                            Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                        )
+                                    } catch (_: Exception) {
+                                        Toast.makeText(context, "Battery settings could not be opened on this device.", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Auto-start managers cannot be read or opened reliably from code, so
+                        // the best we can do is tell the user what to look for.
+                        Text(
+                            text = "On Xiaomi, Oppo, Vivo, Realme, OnePlus and Samsung phones, also allow Auto-start for this app and remove it from the battery saver or app cleaner list. Otherwise the phone can still close the app at night and the alarm will not ring.",
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
                         Spacer(modifier = Modifier.height(24.dp))
-                        
+
                         // SECTION header: IMPLICIT PERMISSIONS
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -543,6 +602,11 @@ fun SettingsScreen(
                         // Page 5: the shared holiday / work-day list. Its own back arrow is
                         // hidden because this page already sits under the settings top bar.
                         HolidaysScreen(viewModel = viewModel, onBack = { openSection = null })
+                    }
+                    SettingsSection.HISTORY -> {
+                        // Page 6: the alarm event log. Its own back arrow is hidden because
+                        // this page already sits under the settings top bar.
+                        HistoryScreen(viewModel = viewModel, onBack = { openSection = null })
                     }
                     SettingsSection.MUSIC -> {
                         // Page 6: Music Scheduler — playlist crossfade settings
@@ -1729,11 +1793,14 @@ private fun VoiceLanguageCard(context: Context) {
 fun InfoCard(
     label: String,
     value: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    badgeColor: Color
+    icon: androidx.compose.ui.graphics.vector.ImageVector = Icons.Default.Info,
+    badgeColor: Color = MaterialTheme.colorScheme.primary,
+    onClick: (() -> Unit)? = null
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
@@ -1753,7 +1820,7 @@ fun InfoCard(
                 Icon(imageVector = icon, contentDescription = label, tint = badgeColor, modifier = Modifier.size(22.dp))
             }
             Spacer(modifier = Modifier.width(16.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = label,
                     fontSize = 11.sp,

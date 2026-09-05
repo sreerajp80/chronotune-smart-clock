@@ -2,7 +2,6 @@
 
 package `in`.sreerajp.chronotune_smart_clock
 
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
@@ -20,7 +19,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import `in`.sreerajp.chronotune_smart_clock.audio.AudioEngine
@@ -33,15 +31,11 @@ import java.util.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlin.math.roundToInt
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 
 // Single-letter label for a day number (1=Mon .. 7=Sun).
 internal fun dayLetter(n: Int): String = when (n) {
@@ -90,12 +84,18 @@ private fun formatEpochDay(epochDay: Long): String {
 fun AlarmsScreen(
     viewModel: ClockViewModel,
     onOpenSettings: () -> Unit,
+    // Opens the alarm history. Used by the "did not ring" banner, which is only useful if the
+    // user can get to the events behind it.
+    onOpenHistory: () -> Unit = onOpenSettings,
     // Lets a spoken command that is not about alarms ("timer for 10 minutes") move the
     // user to the tab where the result actually shows up.
     onNavigateTab: (Int) -> Unit = {}
 ) {
     val alarms by viewModel.alarms.collectAsStateWithLifecycle()
     val is24Hour by AppPrefs.is24Hour.collectAsStateWithLifecycle()
+    // An alarm that was armed for a past time and never rang. Null unless there is one the
+    // user has not already been told about.
+    val missedAlarm by viewModel.missedAlarm.collectAsStateWithLifecycle()
     @Suppress("ASSIGNED_VALUE_IS_NEVER_READ")
     var showAddDialog by remember { mutableStateOf(false) }
     var editingAlarm by remember { mutableStateOf<Alarm?>(null) }
@@ -153,6 +153,22 @@ fun AlarmsScreen(
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
+
+            // The one thing the user most needs to know when they open this screen: an alarm
+            // that should have gone off did not. Without this, a failure leaves no trace the
+            // user would ever see.
+            missedAlarm?.let { missed ->
+                MissedAlarmBanner(
+                    missed = missed,
+                    is24Hour = is24Hour,
+                    onOpenHistory = {
+                        viewModel.dismissMissedAlarmBanner()
+                        onOpenHistory()
+                    },
+                    onDismiss = { viewModel.dismissMissedAlarmBanner() }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             if (alarms.isEmpty()) {
                 Box(
@@ -1355,3 +1371,71 @@ private fun StepperButton(label: String, onClick: () -> Unit) {
 // ==========================================
 
 
+
+/**
+ * Tells the user, plainly, that an alarm they were relying on did not go off.
+ *
+ * Shown once per missed alarm: dismissing it records which one was seen, so it does not come
+ * back every time the screen is opened.
+ */
+@Composable
+private fun MissedAlarmBanner(
+    missed: `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent,
+    is24Hour: Boolean,
+    onOpenHistory: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val pattern = if (is24Hour) "EEE d MMM, HH:mm" else "EEE d MMM, hh:mm a"
+    val stamp = remember(pattern) {
+        java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault())
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.errorContainer
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "An alarm did not ring",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = buildString {
+                    append(stamp.format(java.util.Date(missed.scheduledAt)))
+                    if (missed.label.isNotBlank()) append(" — ${missed.label}")
+                },
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+            Text(
+                text = "It was set, but nothing was recorded as ringing at that time.",
+                fontSize = 12.5.sp,
+                lineHeight = 17.sp,
+                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f)
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text("Hide", color = MaterialTheme.colorScheme.onErrorContainer)
+                }
+                TextButton(onClick = onOpenHistory) {
+                    Text("See why", color = MaterialTheme.colorScheme.onErrorContainer)
+                }
+            }
+        }
+    }
+}

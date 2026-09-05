@@ -95,6 +95,31 @@ object AppPrefs {
     // Duration of the alarm volume ramp when fade-in is enabled.
     const val FADE_IN_MS = 20_000L
 
+    // How often the re-arm watchdog wakes up to check that every enabled alarm still has a
+    // live PendingIntent. Three hours is often enough to catch a force-stop well before the
+    // next morning, and rare enough to cost nothing measurable on the battery.
+    const val WATCHDOG_INTERVAL_MS = 3 * 60 * 60 * 1000L
+
+    // Set while the alarm stream volume is being held at maximum for a ring, so the original
+    // level can be put back even if the process is killed mid-ring. -1 = nothing saved.
+    private const val KEY_SAVED_ALARM_VOLUME = "saved_alarm_stream_volume"
+
+    // How long the alarm event history is kept. Long enough to look back over a bad month,
+    // short enough that the table never grows without limit.
+    const val EVENT_RETENTION_DAYS = 90
+    const val EVENT_RETENTION_MS = EVENT_RETENTION_DAYS * 24L * 60L * 60L * 1000L
+
+    // How far back the missed-alarm check looks. A miss older than this is history the user
+    // has already lived through; reporting it now would only be noise.
+    const val MISSED_LOOKBACK_MS = 7L * 24L * 60L * 60L * 1000L
+
+    // Rows loaded into the history screen at once.
+    const val EVENT_PAGE_SIZE = 500
+
+    // The most recent missed alarm the user has already been shown, so the banner on the
+    // alarms screen does not keep reappearing for the same one. 0 = none dismissed yet.
+    private const val KEY_MISSED_BANNER_SEEN = "missed_alarm_banner_seen_at"
+
     // Crossfade duration bounds + default, in milliseconds.
     const val CROSSFADE_MIN_MS = 0
     const val CROSSFADE_MAX_MS = 12_000
@@ -187,6 +212,31 @@ object AppPrefs {
 
     fun markMalayalamVoiceNoticeShown(context: Context) {
         prefs(context).edit().putBoolean(KEY_VOICE_ML_NOTICE_SHOWN, true).apply()
+    }
+
+    /**
+     * Remembers the device alarm-stream level that was in force before a ring raised it to
+     * maximum. Stored on disk rather than in memory so a process killed mid-ring does not
+     * leave the phone stuck at maximum alarm volume.
+     */
+    fun setSavedAlarmStreamVolume(context: Context, value: Int) {
+        prefs(context).edit().putInt(KEY_SAVED_ALARM_VOLUME, value).apply()
+    }
+
+    /** The level to put back, or -1 when nothing is pending. */
+    fun getSavedAlarmStreamVolume(context: Context): Int =
+        prefs(context).getInt(KEY_SAVED_ALARM_VOLUME, -1)
+
+    fun clearSavedAlarmStreamVolume(context: Context) {
+        prefs(context).edit().remove(KEY_SAVED_ALARM_VOLUME).apply()
+    }
+
+    /** Due time of the newest missed alarm the user has already dismissed the banner for. */
+    fun getMissedBannerSeenAt(context: Context): Long =
+        prefs(context).getLong(KEY_MISSED_BANNER_SEEN, 0L)
+
+    fun setMissedBannerSeenAt(context: Context, dueAt: Long) {
+        prefs(context).edit().putLong(KEY_MISSED_BANNER_SEEN, dueAt).apply()
     }
 
     fun setIs24Hour(context: Context, value: Boolean) {

@@ -2,7 +2,9 @@ package `in`.sreerajp.chronotune_smart_clock.ui
 
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -11,6 +13,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import `in`.sreerajp.chronotune_smart_clock.AlarmRingingOverlay
 import `in`.sreerajp.chronotune_smart_clock.ui.theme.MyApplicationTheme
 import androidx.compose.foundation.layout.fillMaxSize
@@ -28,6 +33,7 @@ class AlarmActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        hideSystemBars()
         // Tell the service to swap its heads-up notification for a silent low-importance
         // one — the user has the alarm UI in front of them now and doesn't need the
         // floating banner on top of it.
@@ -40,6 +46,12 @@ class AlarmActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Explicitly prevent touches outside the window bounds from finishing the activity.
+        setFinishOnTouchOutside(false)
+
+        // Always keep screen awake while ringing regardless of Android version.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
         // Ensure the activity is visible on the lock screen and turns the screen on.
         // We deliberately do NOT request to dismiss the keyguard — showing over the
         // lock screen is enough for the user to tap Dismiss/Snooze. Asking to dismiss
@@ -50,11 +62,20 @@ class AlarmActivity : ComponentActivity() {
         } else {
             @Suppress("DEPRECATION")
             window.addFlags(
-                android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                    android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                    android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
             )
         }
+
+        hideSystemBars()
+
+        // Block system back button / back gesture from dismissing or hiding the ringing UI.
+        // The ringing screen must only exit when the user taps Dismiss or Snooze.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                // Deliberately ignored
+            }
+        })
 
         setContent {
             val isDark = isSystemInDarkTheme()
@@ -74,7 +95,16 @@ class AlarmActivity : ComponentActivity() {
                     activeAlarm?.let { ring ->
                         AlarmRingingOverlay(
                             alarm = ring,
-                            onDismiss = {
+                            onDismiss = { attempts, challengeMs ->
+                                // Recorded before the teardown, while the ring is still the
+                                // active one and its duration can still be read.
+                                ActiveAlarmState.recordDismiss(
+                                    context = this@AlarmActivity,
+                                    ring = ring,
+                                    source = `in`.sreerajp.chronotune_smart_clock.data.AlarmEvent.SOURCE_FULL_SCREEN,
+                                    challengeAttempts = attempts,
+                                    challengeMs = challengeMs
+                                )
                                 // Stop via the service so audio + notification + foreground
                                 // state are torn down together.
                                 try {
@@ -106,7 +136,17 @@ class AlarmActivity : ComponentActivity() {
                                     snoozeMinutes = snoozeMinutes,
                                     dismissChallenge = ring.dismissChallenge,
                                     challengeDifficulty = ring.challengeDifficulty,
-                                    challengeCount = ring.challengeCount
+                                    challengeCount = ring.challengeCount,
+                                    // Carried through so a snooze taken here behaves exactly
+                                    // like one taken from the notification: the same
+                                    // auto-silence, the same allowance, and the same
+                                    // progressive gap. Leaving these at their defaults used to
+                                    // hand the user unlimited snoozes on a limited alarm.
+                                    autoSilenceMinutes = ring.autoSilenceMinutes,
+                                    maxSnoozeCount = ring.maxSnoozeCount,
+                                    snoozeMode = ring.snoozeMode,
+                                    snoozeCount = ring.snoozeCount,
+                                    baseAlarmId = ring.baseId
                                 )
                                 finish()
                             }
@@ -115,5 +155,12 @@ class AlarmActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun hideSystemBars() {
+        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+        insetsController.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        insetsController.hide(WindowInsetsCompat.Type.systemBars())
     }
 }

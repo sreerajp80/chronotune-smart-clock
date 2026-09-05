@@ -115,6 +115,46 @@ interface MusicScheduleDao {
 }
 
 @Dao
+interface AlarmEventDao {
+    /**
+     * The whole log, newest first. [limit] keeps the history screen from loading months of
+     * rows into memory at once.
+     */
+    @Query("SELECT * FROM alarm_events ORDER BY actualAt DESC, id DESC LIMIT :limit")
+    fun getRecent(limit: Int): Flow<List<AlarmEvent>>
+
+    @Query("SELECT * FROM alarm_events ORDER BY actualAt DESC, id DESC LIMIT :limit")
+    suspend fun getRecentOnce(limit: Int): List<AlarmEvent>
+
+    /** Everything logged for one alarm since a point in time, oldest first. */
+    @Query(
+        "SELECT * FROM alarm_events WHERE alarmId = :alarmId AND actualAt >= :since " +
+            "ORDER BY actualAt ASC, id ASC"
+    )
+    suspend fun getForAlarmSince(alarmId: Int, since: Long): List<AlarmEvent>
+
+    /**
+     * Arm records still waiting to be judged: a [AlarmEvent.SCHEDULED] row whose trigger time
+     * has passed. The missed-alarm check reads these and looks for a matching ring.
+     */
+    @Query(
+        "SELECT * FROM alarm_events WHERE event = 'SCHEDULED' AND scheduledAt > 0 " +
+            "AND scheduledAt < :before AND scheduledAt >= :after ORDER BY scheduledAt ASC"
+    )
+    suspend fun getDueArmRecords(after: Long, before: Long): List<AlarmEvent>
+
+    @Insert
+    suspend fun insert(event: AlarmEvent): Long
+
+    /** Drops rows older than [cutoff]; keeps the log from growing without limit. */
+    @Query("DELETE FROM alarm_events WHERE actualAt < :cutoff")
+    suspend fun deleteBefore(cutoff: Long)
+
+    @Query("DELETE FROM alarm_events")
+    suspend fun deleteAll()
+}
+
+@Dao
 interface SpecialDayDao {
     @Query("SELECT * FROM special_days ORDER BY epochDay ASC")
     fun getAll(): Flow<List<SpecialDay>>

@@ -1,4 +1,10 @@
 <resources>
+    <string name="app_name">ക്ലോക്ക്</string>
+    <string name="widget_digital_clock_label">Chronos ഡിജിറ്റൽ</string>
+    <string name="widget_digital_clock_description">സമയം, സെക്കൻഡ്, തീയതി എന്നിവയുടെ ലളിതമായ ഡിജിറ്റൽ കാഴ്ച.</string>
+    <string name="widget_analog_clock_label">Chronos അനലോഗ്</string>
+    <string name="widget_analog_clock_description">നിങ്ങളുടെ ഹോം സ്ക്രീനിൽ Chronos-ന്റെ സ്വന്തം വാച്ച് ഫേസ്.</string>
+
     <!-- Voice commands -->
     <string name="voice_mic_description">കമാൻഡ് പറയുക</string>
     <string name="voice_prompt">"രാവിലെ 7 മണിക്ക് അലാറം വെക്കൂ" എന്ന് പറയാം</string>
